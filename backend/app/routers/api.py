@@ -39,12 +39,17 @@ def get_ai(request: Request) -> ResilientAI:
     return request.app.state.ai
 
 
+MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+
+
 def _media(upload: UploadFile | None, default_mime: str) -> Media | None:
     if upload is None:
         return None
-    data = upload.file.read()
+    data = upload.file.read(MAX_UPLOAD_BYTES + 1)
     if not data:
         return None
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)")
     return Media(data, upload.content_type or default_mime, upload.filename or "")
 
 
