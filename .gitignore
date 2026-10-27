@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Local data (SQLite + uploaded media) - never commit citizen uploads
+backend/data/*.db
+backend/data/*.db-*
+backend/data/uploads/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Node / Vite
+node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

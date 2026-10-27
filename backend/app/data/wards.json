@@ -1,0 +1,30 @@
+{
+  "_note": "Approximate ward centroids for the demo. Nearest-centroid assignment is a stand-in for proper ward polygons (swap in GBA/BBMP GIS boundaries for production).",
+  "wards": [
+    {"name": "Bellandur", "zone": "Mahadevapura", "lat": 12.9260, "lng": 77.6762},
+    {"name": "HSR Layout", "zone": "Bommanahalli", "lat": 12.9116, "lng": 77.6389},
+    {"name": "Koramangala", "zone": "South", "lat": 12.9352, "lng": 77.6245},
+    {"name": "Indiranagar", "zone": "East", "lat": 12.9784, "lng": 77.6408},
+    {"name": "Domlur", "zone": "East", "lat": 12.9609, "lng": 77.6387},
+    {"name": "Marathahalli", "zone": "Mahadevapura", "lat": 12.9591, "lng": 77.6974},
+    {"name": "Hagadur (Whitefield)", "zone": "Mahadevapura", "lat": 12.9698, "lng": 77.7500},
+    {"name": "Varthur", "zone": "Mahadevapura", "lat": 12.9400, "lng": 77.7430},
+    {"name": "Mahadevapura", "zone": "Mahadevapura", "lat": 12.9900, "lng": 77.6970},
+    {"name": "KR Puram", "zone": "Mahadevapura", "lat": 13.0040, "lng": 77.6960},
+    {"name": "BTM Layout", "zone": "Bommanahalli", "lat": 12.9166, "lng": 77.6101},
+    {"name": "Bommanahalli", "zone": "Bommanahalli", "lat": 12.9010, "lng": 77.6240},
+    {"name": "Electronic City", "zone": "Bommanahalli", "lat": 12.8452, "lng": 77.6602},
+    {"name": "Jayanagar", "zone": "South", "lat": 12.9308, "lng": 77.5838},
+    {"name": "JP Nagar", "zone": "South", "lat": 12.9063, "lng": 77.5857},
+    {"name": "Banashankari", "zone": "South", "lat": 12.9255, "lng": 77.5468},
+    {"name": "Basavanagudi", "zone": "South", "lat": 12.9422, "lng": 77.5755},
+    {"name": "Shivajinagar", "zone": "East", "lat": 12.9857, "lng": 77.6057},
+    {"name": "Shanthinagar", "zone": "East", "lat": 12.9578, "lng": 77.5986},
+    {"name": "Malleshwaram", "zone": "West", "lat": 13.0031, "lng": 77.5643},
+    {"name": "Rajajinagar", "zone": "West", "lat": 12.9915, "lng": 77.5520},
+    {"name": "Vijayanagar", "zone": "West", "lat": 12.9719, "lng": 77.5304},
+    {"name": "Hebbal", "zone": "Yelahanka", "lat": 13.0382, "lng": 77.5920},
+    {"name": "Sanjaynagar", "zone": "Yelahanka", "lat": 13.0369, "lng": 77.5790},
+    {"name": "Yelahanka", "zone": "Yelahanka", "lat": 13.1007, "lng": 77.5963}
+  ]
+}
