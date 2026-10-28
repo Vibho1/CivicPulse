@@ -1,0 +1,5 @@
+# What `gcloud builds submit` must not upload to Cloud Build (same rules as the Docker context).
+.gcloudignore
+.git
+.gitignore
+#!include:.dockerignore

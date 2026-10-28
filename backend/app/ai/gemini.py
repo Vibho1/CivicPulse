@@ -12,7 +12,7 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from ..domain import Agency, Category, Hazard, Verdict
+from ..domain import LEGACY_CATEGORY_IDS, Agency, Category, Hazard, Verdict
 from ..schemas import EscalationDraft, Extraction, VerificationResult
 from . import templates
 from .audio import normalise_audio
@@ -32,13 +32,24 @@ Rules:
   script, code-mixed exactly as spoken). Empty string if there is no audio.
 - transcript_english: faithful English rendering of everything the citizen conveyed (voice + typed text).
 - language: 'kn', 'en', 'hi', 'kn-en' (code-mixed), 'hi-en', etc.
-- category: exactly one. 'pothole' for holes/craters in the carriageway; 'road_damage' for cave-ins, sunk patches,
-  unrestored road cuts; 'open_drain_manhole' for missing covers; 'waterlogging' for standing/flood water.
+- category: exactly one. 'pothole' for holes/craters in the carriageway; 'unrestored_utility_trench' for a road cut or
+  trench dug for water/sewage/power/telecom/gas work and left unrestored or badly refilled; 'road_damage' for cave-ins
+  and sunk patches not caused by a trench; 'streetlight_outage' for dead streetlights; 'garbage_dump' for garbage
+  black spots and dumping; 'damaged_footpath' for broken footpaths; 'open_drain_manhole' for missing covers;
+  'waterlogging' for standing/flood water.
 - severity: 1 cosmetic, 2 minor, 3 needs attention this week, 4 likely to cause injury/damage, 5 immediate danger to life.
+- estimated_dimensions_cm: approximate length / width / depth in centimetres when the photo or the citizen gives a sense
+  of scale; null when you cannot tell. size_estimate: the same in words.
+- landmark: the nearest road or landmark mentioned or visible, expanded if abbreviated (e.g. "ORR" -> "Outer Ring Road").
 - hazards: only flags that are supported by the audio, text, photo, or the location context provided.
 - evidence: look carefully at the photo for a freshly dug or refilled trench, pipeline/cable work, barricades or
   agency markings (BWSSB blue pipes, BESCOM cable ducts, BMRCL/Namma Metro barricades). Set photo_usable=false if the
-  photo is blurry, dark, or does not show the issue.
+  photo is blurry, dark, or does not show the issue. Set stock_or_screenshot=true if the photo looks like a stock or
+  downloaded image, a screenshot, a watermarked picture or a photo of a screen.
+- sensitive_regions: box every human face and every readable vehicle number plate in the photo (box_2d =
+  [ymin, xmin, ymax, xmax] normalised to 0-1000) so they can be blurred before publishing. Empty list if none.
+- is_emergency: true only if someone is hurt or in immediate danger right now (fire, electrocution, a person injured or
+  trapped, gas leak, collapse). CivicPulse does not dispatch help; the citizen will be told to call 112.
 - suggested_agency: GBA_ROADS (potholes, resurfacing, footpaths; the city corporation, formerly BBMP), GBA_SWM (garbage),
   GBA_SWD (storm-water drains / waterlogging), GBA_ELECTRICAL (streetlights), GBA_FORESTRY (trees), BWSSB (water supply,
   sewage, pipeline trenches), BESCOM (electric poles, wires, transformers, power-cable trenches), BMRCL (metro works),
@@ -64,10 +75,14 @@ Verdict rules: different location -> UNVERIFIED_DIFFERENT_LOCATION; same locatio
 UNVERIFIED_NOT_FIXED; same location and cosmetic -> UNVERIFIED_COSMETIC; same location and proper/partial fix ->
 VERIFIED; cannot tell -> INCONCLUSIVE. Be skeptical: officials sometimes upload a photo of a different, already-good
 stretch. Write the explanation for a ward engineer or RWA member in 2-3 plain sentences.
+Also box every human face and readable vehicle number plate in the AFTER photo as after_sensitive_regions (box_2d =
+[ymin, xmin, ymax, xmax] normalised to 0-1000) so they can be blurred before publishing.
 """
 
 ESCALATION_SYSTEM_PROMPT = """You draft citizen escalations for CivicPulse (Bengaluru). Be factual, polite and firm.
 Use only the facts in the provided JSON context; never invent names, dates or laws beyond the RTI Act, 2005.
+Always include the ticket id, the ward, the responsible agency (and its code), the failure reason, the coordinates,
+the first-reported timestamp, and the before/after photo links and issue link from the context.
 - email: formal letter to the responsible ward/sub-division engineer; include ticket id, location, days open, number of
   independent reports, SLA status, verification status; ask for rectification within 48 hours, a geo-tagged after-photo
   on closure, and warranty/defect-liability enforcement if applicable. Provide a subject line.
@@ -77,38 +92,87 @@ Use only the facts in the provided JSON context; never invent names, dates or la
   defect-liability period, and the inspection evidence used to close complaints.
 """
 
+X_MAX_CHARS = 280
+
 
 class GeminiAI:
     name = "gemini"
 
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash", timeout_s: int = 60):
+    def __init__(
+        self,
+        api_key: str = "",
+        model: str = "gemini-2.5-flash",
+        timeout_s: int = 60,
+        *,
+        vertex: bool = False,
+        project: str = "",
+        location: str = "global",
+        parse_timeout_s: int | None = None,
+    ):
         from google import genai
         from google.genai import types
 
         self._types = types
         self.model = model
-        self.client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=timeout_s * 1000))
+        self.timeout_s = timeout_s
+        # Citizen-facing parse calls give up sooner and fall back to the offline parser (PRD p95 < 5 s).
+        self.parse_timeout_s = parse_timeout_s or timeout_s
+        self._allow_minimal_thinking = True
+        http_options = types.HttpOptions(timeout=timeout_s * 1000)
+        if vertex:
+            # Vertex AI with Application Default Credentials (e.g. the Cloud Run service account): no key to manage.
+            self.client = genai.Client(vertexai=True, project=project or None, location=location or "global", http_options=http_options)
+        else:
+            self.client = genai.Client(api_key=api_key, http_options=http_options)
 
     # ------------------------------------------------------------------ utils
-    def _config(self, system: str, schema: type[BaseModel], temperature: float, fast: bool):
+    @property
+    def _gemini3(self) -> bool:
+        return self.model.removeprefix("models/").startswith("gemini-3")
+
+    def _config(self, system: str, schema: type[BaseModel], temperature: float, fast: bool, timeout_s: int | None = None):
         types = self._types
         kwargs: dict[str, Any] = dict(
             system_instruction=system,
             response_mime_type="application/json",
             response_schema=schema,
-            temperature=temperature,
             max_output_tokens=4096,
         )
-        if fast and "2.5-flash" in self.model:
-            kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+        if self._gemini3:
+            # Gemini 3 thinks at "high" by default (8-10 s for a report). Keep it short; Google
+            # recommends leaving temperature at its default for these models.
+            minimal = fast and "flash" in self.model and self._allow_minimal_thinking
+            level = types.ThinkingLevel.MINIMAL if minimal else types.ThinkingLevel.LOW
+            kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=level)
+        else:
+            kwargs["temperature"] = temperature
+            if fast and "2.5-flash" in self.model:
+                kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+        if timeout_s:
+            kwargs["http_options"] = types.HttpOptions(timeout=timeout_s * 1000)
         return types.GenerateContentConfig(**kwargs)
 
-    def _generate(self, parts: list, system: str, schema: type[T], temperature: float = 0.2, fast: bool = True) -> T:
+    def _call(self, contents: list, system: str, schema: type[BaseModel], temperature: float, fast: bool, timeout_s: int | None):
+        try:
+            return self.client.models.generate_content(
+                model=self.model, contents=contents, config=self._config(system, schema, temperature, fast, timeout_s)
+            )
+        except Exception as exc:
+            if not (self._gemini3 and self._allow_minimal_thinking and "thinking" in str(exc).lower()):
+                raise
+            # This model does not accept the "minimal" level: use "low" from now on.
+            log.warning("Model %s rejected minimal thinking (%s); retrying with low", self.model, exc)
+            self._allow_minimal_thinking = False
+            return self.client.models.generate_content(
+                model=self.model, contents=contents, config=self._config(system, schema, temperature, fast, timeout_s)
+            )
+
+    def _generate(
+        self, parts: list, system: str, schema: type[T], temperature: float = 0.2, fast: bool = True, timeout_s: int | None = None
+    ) -> T:
         types = self._types
         content = types.Content(role="user", parts=parts)
-        resp = self.client.models.generate_content(
-            model=self.model, contents=[content], config=self._config(system, schema, temperature, fast)
-        )
+        resp = self._call([content], system, schema, temperature, fast, timeout_s)
         parsed = getattr(resp, "parsed", None)
         if isinstance(parsed, schema):
             return parsed
@@ -140,7 +204,7 @@ class GeminiAI:
             "Produce the structured ticket."
         )
         parts.append(self._part_text(prompt))
-        return self._generate(parts, PARSER_SYSTEM_PROMPT, Extraction, temperature=0.2, fast=True)
+        return self._generate(parts, PARSER_SYSTEM_PROMPT, Extraction, temperature=0.2, fast=True, timeout_s=self.parse_timeout_s)
 
     def verify_fix(self, before: list[Media], after: Media, context: str) -> VerificationResult:
         parts = [self._part_text(f"Issue context: {context}")]
@@ -158,15 +222,47 @@ class GeminiAI:
         try:
             draft = self._generate([self._part_text(prompt)], ESCALATION_SYSTEM_PROMPT, EscalationDraft, temperature=0.4, fast=True)
             draft.channel = channel  # type: ignore[assignment]
-            return draft
         except Exception as exc:  # noqa: BLE001
             log.warning("Gemini escalation draft failed (%s); using template", exc)
             return templates.draft(channel, context)
+        problem = escalation_problem(draft, context)
+        if problem:
+            log.warning("Gemini %s draft rejected (%s); using template", channel, problem)
+            return templates.draft(channel, context)
+        return draft
+
+
+def escalation_problem(draft: EscalationDraft, context: dict) -> str | None:
+    """Why a model-written draft does not meet the PRD (None if it does)."""
+    ticket = str(context.get("cluster_id") or "")
+    if ticket and ticket not in f"{draft.subject or ''} {draft.body}":
+        return "ticket id missing"
+    if draft.channel == "x":
+        if len(draft.body) > X_MAX_CHARS:
+            return f"X post is {len(draft.body)} characters"
+    elif context.get("public_url") and context["public_url"] not in draft.body:
+        return "evidence link missing"
+    return None
 
 
 # --------------------------------------------------------------------------- #
 # Lenient coercion for when the SDK could not parse the structured response
 # --------------------------------------------------------------------------- #
+
+
+def _regions(raw: Any) -> list[dict]:
+    """Keep only well-formed face / plate boxes."""
+    out = []
+    for r in raw or []:
+        if not isinstance(r, dict):
+            continue
+        box = r.get("box_2d")
+        if r.get("kind") in ("face", "license_plate") and isinstance(box, list) and len(box) == 4:
+            try:
+                out.append({"kind": r["kind"], "box_2d": [int(round(float(v))) for v in box]})
+            except (TypeError, ValueError):
+                continue
+    return out
 
 
 def _lenient(schema: type[BaseModel], data: Any) -> Any:
@@ -175,6 +271,7 @@ def _lenient(schema: type[BaseModel], data: Any) -> Any:
     if schema is Extraction:
         valid_h = {h.value for h in Hazard}
         data["hazards"] = [h for h in (data.get("hazards") or []) if h in valid_h]
+        data["category"] = LEGACY_CATEGORY_IDS.get(data.get("category"), data.get("category"))
         if data.get("category") not in {c.value for c in Category}:
             data["category"] = Category.OTHER.value
         if data.get("suggested_agency") not in {a.value for a in Agency}:
@@ -184,8 +281,13 @@ def _lenient(schema: type[BaseModel], data: Any) -> Any:
         except (TypeError, ValueError):
             data["severity"] = 3
         data.setdefault("evidence", {})
-    if schema is VerificationResult and data.get("verdict") not in {v.value for v in Verdict}:
-        data["verdict"] = Verdict.INCONCLUSIVE.value
+        data["sensitive_regions"] = _regions(data.get("sensitive_regions"))
+        if not isinstance(data.get("estimated_dimensions_cm"), dict):
+            data["estimated_dimensions_cm"] = None
+    if schema is VerificationResult:
+        if data.get("verdict") not in {v.value for v in Verdict}:
+            data["verdict"] = Verdict.INCONCLUSIVE.value
+        data["after_sensitive_regions"] = _regions(data.get("after_sensitive_regions"))
     return data
 
 

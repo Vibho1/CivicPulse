@@ -23,6 +23,13 @@ frontend/dist/
 frontend/.vite/
 npm-debug.log*
 
+# Terraform (commit .terraform.lock.hcl; never commit state or your tfvars)
+.terraform/
+*.tfstate
+*.tfstate.*
+deploy/terraform/terraform.tfvars
+crash.log
+
 # OS / editors
 .DS_Store
 Thumbs.db

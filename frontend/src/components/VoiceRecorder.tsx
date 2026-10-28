@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useI18n } from '../i18n';
 import { Icon } from './Icon';
 
 export interface AudioNote {
@@ -9,7 +10,10 @@ export interface AudioNote {
 }
 
 const MIME_CANDIDATES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4;codecs=mp4a.40.2', 'audio/mp4', 'audio/ogg;codecs=opus'];
-const MAX_SECONDS = 90;
+/** PRD cap for voice notes; the API rejects longer clips (422 `audio_too_long`). */
+const MAX_SECONDS = 30;
+/** Auto-stop this much early so encoder latency never pushes a clip past the cap. */
+const STOP_MARGIN_MS = 400;
 
 export function pickRecorderMime(): string | null {
   if (typeof MediaRecorder === 'undefined') return null;
@@ -47,6 +51,7 @@ interface Props {
 }
 
 export function VoiceRecorder({ value, onChange, disabled = false }: Props) {
+  const { lang, t } = useI18n();
   const [phase, setPhase] = useState<Phase>(() => (typeof MediaRecorder === 'undefined' || !navigator.mediaDevices?.getUserMedia ? 'unsupported' : value ? 'done' : 'idle'));
   const [seconds, setSeconds] = useState(0);
   const [level, setLevel] = useState(0);
@@ -105,7 +110,7 @@ export function VoiceRecorder({ value, onChange, disabled = false }: Props) {
         const durationS = Math.max(1, Math.round((Date.now() - startedAtRef.current) / 1000));
         cleanupStream();
         if (blob.size === 0) {
-          setError('Nothing was recorded. Check the microphone and try again.');
+          setError(t('voice.empty'));
           setPhase('idle');
           return;
         }
@@ -113,7 +118,7 @@ export function VoiceRecorder({ value, onChange, disabled = false }: Props) {
         setPhase('done');
       };
       rec.onerror = () => {
-        setError('Recording failed. Try again or type the complaint instead.');
+        setError(t('voice.failed'));
         cleanupStream();
         setPhase('idle');
       };
@@ -149,9 +154,9 @@ export function VoiceRecorder({ value, onChange, disabled = false }: Props) {
       startedAtRef.current = Date.now();
       setSeconds(0);
       timerRef.current = window.setInterval(() => {
-        const s = Math.floor((Date.now() - startedAtRef.current) / 1000);
-        setSeconds(s);
-        if (s >= MAX_SECONDS) stop();
+        const ms = Date.now() - startedAtRef.current;
+        setSeconds(Math.min(MAX_SECONDS, Math.floor(ms / 1000)));
+        if (ms >= MAX_SECONDS * 1000 - STOP_MARGIN_MS) stop();
       }, 250);
       rec.start(250);
       setPhase('recording');
@@ -160,12 +165,12 @@ export function VoiceRecorder({ value, onChange, disabled = false }: Props) {
       const name = e instanceof DOMException ? e.name : '';
       setError(
         name === 'NotAllowedError'
-          ? 'Microphone permission denied. You can still type the complaint below.'
+          ? t('voice.denied')
           : name === 'NotFoundError'
-            ? 'No microphone found. You can still type the complaint below.'
-            : e instanceof Error
+            ? t('voice.noMic')
+            : lang === 'en' && e instanceof Error
               ? e.message
-              : 'Could not start recording.',
+              : t('voice.startFailed'),
       );
       setPhase('idle');
     }
@@ -182,7 +187,7 @@ export function VoiceRecorder({ value, onChange, disabled = false }: Props) {
     return (
       <div className="recorder recorder-unsupported">
         <Icon name="mic" size={18} />
-        <span>Voice recording is not supported in this browser — type the complaint below instead.</span>
+        <span>{t('voice.unsupported')}</span>
       </div>
     );
   }
@@ -192,17 +197,17 @@ export function VoiceRecorder({ value, onChange, disabled = false }: Props) {
       <div className="recorder recorder-done">
         <div className="recorder-row">
           <span className="chip chip-ok">
-            <Icon name="check" size={13} /> Voice note · {fmtClock(value.durationS)}
+            <Icon name="check" size={13} /> {t('voice.note', { duration: fmtClock(value.durationS) })}
           </span>
           <span className="muted small">{value.mimeType.split(';')[0]}</span>
         </div>
         <audio controls src={value.url} className="audio-player" preload="metadata" />
         <div className="row gap-s">
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => void start()} disabled={disabled}>
-            <Icon name="rotate" size={14} /> Re-record
+            <Icon name="rotate" size={14} /> {t('voice.rerecord')}
           </button>
           <button type="button" className="btn btn-ghost btn-sm danger" onClick={discard} disabled={disabled}>
-            <Icon name="trash" size={14} /> Remove
+            <Icon name="trash" size={14} /> {t('common.remove')}
           </button>
         </div>
       </div>
@@ -220,13 +225,17 @@ export function VoiceRecorder({ value, onChange, disabled = false }: Props) {
           onClick={() => (recording ? stop() : void start())}
           disabled={disabled || phase === 'requesting'}
           aria-pressed={recording}
-          aria-label={recording ? 'Stop recording' : 'Start recording'}
+          aria-label={recording ? t('voice.stop') : t('voice.start')}
         >
           <Icon name={recording ? 'stop' : 'mic'} size={22} />
         </button>
         <div className="recorder-status">
           <div className="recorder-time" aria-live="polite">
-            {phase === 'requesting' ? 'Waiting for microphone…' : recording ? `Recording ${fmtClock(seconds)}` : 'Tap to record (up to 1:30)'}
+            {phase === 'requesting'
+              ? t('voice.waiting')
+              : recording
+                ? t('voice.recording', { elapsed: fmtClock(seconds), max: fmtClock(MAX_SECONDS) })
+                : t('voice.tapToRecord', { max: fmtClock(MAX_SECONDS) })}
           </div>
           <div className="level" aria-hidden="true">
             {Array.from({ length: bars }, (_, i) => {
@@ -236,7 +245,7 @@ export function VoiceRecorder({ value, onChange, disabled = false }: Props) {
             })}
           </div>
           <div className="hint">
-            {recording ? (level > 0.08 ? 'Hearing you clearly.' : 'Speak a little louder or closer to the mic.') : 'Kannada, English, Hindi or mixed — Gemini transcribes and translates.'}
+            {recording ? (level > 0.08 ? t('voice.levelGood') : t('voice.levelLow')) : t('voice.hint')}
           </div>
         </div>
       </div>

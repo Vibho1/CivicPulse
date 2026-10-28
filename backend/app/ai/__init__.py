@@ -1,8 +1,8 @@
 """AI provider factory.
 
 ``get_ai()`` returns a :class:`ResilientAI` that prefers Gemini when a key is
-configured and always falls back to the offline heuristic provider, so a demo
-never dies on a quota error or a flaky network.
+configured (or Vertex AI is enabled) and always falls back to the offline heuristic
+provider, so a demo never dies on a quota error or a flaky network.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from functools import lru_cache
 
-from ..config import get_settings
+from ..config import Settings, get_settings
 from ..schemas import EscalationDraft, Extraction, VerificationResult
 from .base import EvidenceAI, Media, ParseInput
 from .heuristic import HeuristicAI
@@ -60,14 +60,26 @@ class ResilientAI:
         return self.fallback.draft_escalation(channel, context), f"{self.fallback.name}_fallback" if self.primary else self.fallback.name
 
 
-def build_ai(api_key: str = "", model: str = "gemini-2.5-flash", timeout_s: int = 60) -> ResilientAI:
+def build_ai(
+    api_key: str = "",
+    model: str = "gemini-2.5-flash",
+    timeout_s: int = 60,
+    *,
+    use_vertex: bool = False,
+    project: str = "",
+    location: str = "global",
+    parse_timeout_s: int | None = None,
+) -> ResilientAI:
     primary: EvidenceAI | None = None
-    if api_key:
+    if api_key or use_vertex:
         try:
             from .gemini import GeminiAI
 
-            primary = GeminiAI(api_key=api_key, model=model, timeout_s=timeout_s)
-            log.info("Gemini enabled (model=%s)", model)
+            primary = GeminiAI(
+                api_key=api_key, model=model, timeout_s=timeout_s, vertex=use_vertex, project=project, location=location,
+                parse_timeout_s=parse_timeout_s,
+            )
+            log.info("Gemini enabled (model=%s, via %s)", model, f"Vertex AI, location={location}" if use_vertex else "API key")
         except Exception as exc:  # noqa: BLE001
             log.warning("Could not initialise Gemini (%s); running in heuristic mode", exc)
     else:
@@ -75,7 +87,18 @@ def build_ai(api_key: str = "", model: str = "gemini-2.5-flash", timeout_s: int 
     return ResilientAI(primary, HeuristicAI())
 
 
+def build_ai_from_settings(s: Settings) -> ResilientAI:
+    return build_ai(
+        s.gemini_api_key,
+        s.gemini_model,
+        s.gemini_timeout_s,
+        use_vertex=s.gemini_use_vertex,
+        project=s.google_cloud_project,
+        location=s.google_cloud_location,
+        parse_timeout_s=s.gemini_parse_timeout_s,
+    )
+
+
 @lru_cache(maxsize=1)
 def get_ai() -> ResilientAI:
-    s = get_settings()
-    return build_ai(s.gemini_api_key, s.gemini_model, s.gemini_timeout_s)
+    return build_ai_from_settings(get_settings())

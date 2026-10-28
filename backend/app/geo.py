@@ -64,6 +64,7 @@ class Ward:
     zone: str
     lat: float
     lng: float
+    number: int | None = None  # official ward number where known (e.g. 150 Bellandur)
 
 
 @lru_cache(maxsize=1)
@@ -169,3 +170,62 @@ def normalise_photo(image_bytes: bytes, max_side: int = 1280, quality: int = 85)
 def centroid(points: Iterable[tuple[float, float]]) -> tuple[float, float]:
     pts = list(points)
     return sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)
+
+
+def has_exif(image_bytes: bytes) -> bool:
+    """True if the image carries any EXIF metadata. Camera photos do; screenshots,
+    forwarded (e.g. WhatsApp) and downloaded/stock images usually do not."""
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(image_bytes)) as im:
+            return len(im.getexif()) > 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def blur_regions(image_bytes: bytes, regions: Iterable, pad: float = 0.15, quality: int = 85) -> tuple[bytes, int]:
+    """Pixelate and blur faces / number plates before a photo is stored publicly.
+
+    ``regions`` are objects or dicts with ``box_2d`` = [ymin, xmin, ymax, xmax] on
+    a 0-1000 grid (Gemini's detection format). Returns (jpeg_bytes, regions_blurred);
+    the input is returned unchanged if there is nothing to blur or it cannot be decoded.
+    """
+    boxes = []
+    for r in regions or []:
+        box = r.get("box_2d") if isinstance(r, dict) else getattr(r, "box_2d", None)
+        if not box or len(box) != 4:
+            continue
+        try:
+            ymin, xmin, ymax, xmax = (max(0, min(1000, int(v))) for v in box)
+        except (TypeError, ValueError):
+            continue
+        if ymax > ymin and xmax > xmin:
+            boxes.append((ymin, xmin, ymax, xmax))
+    if not boxes:
+        return image_bytes, 0
+    try:
+        from PIL import Image, ImageFilter
+
+        with Image.open(io.BytesIO(image_bytes)) as src:
+            im = src.convert("RGB")
+        w, h = im.size
+        done = 0
+        for ymin, xmin, ymax, xmax in boxes:
+            bw, bh = (xmax - xmin) * w / 1000, (ymax - ymin) * h / 1000
+            x0, y0 = max(0, int(xmin * w / 1000 - bw * pad)), max(0, int(ymin * h / 1000 - bh * pad))
+            x1, y1 = min(w, int(xmax * w / 1000 + bw * pad)), min(h, int(ymax * h / 1000 + bh * pad))
+            if x1 - x0 < 2 or y1 - y0 < 2:
+                continue
+            region = im.crop((x0, y0, x1, y1))
+            tiny = region.resize((max(1, (x1 - x0) // 12), max(1, (y1 - y0) // 12)), Image.Resampling.BILINEAR)
+            region = tiny.resize(region.size, Image.Resampling.NEAREST).filter(ImageFilter.GaussianBlur(radius=max(2, (x1 - x0) // 24)))
+            im.paste(region, (x0, y0))
+            done += 1
+        if not done:
+            return image_bytes, 0
+        out = io.BytesIO()
+        im.save(out, format="JPEG", quality=quality, optimize=True)
+        return out.getvalue(), done
+    except Exception:  # noqa: BLE001
+        return image_bytes, 0

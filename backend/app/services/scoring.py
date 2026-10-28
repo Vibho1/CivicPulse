@@ -1,12 +1,16 @@
-"""Civic impact score (0-100) with an explainable breakdown.
+"""Civic impact score (0-100) with the PRD weights and an explainable breakdown.
 
-Components:
-  corroboration  how many independent citizens reported it (log-scaled)
-  severity       worst severity across reports
-  context        sensitive surroundings: schools, hospitals, arterial roads, junctions
-  hazard         risk flags: two-wheeler skids, live wires, open drains, night visibility
-  sla            how far past the service target the issue is
-  repeat         failed again inside the repeat-failure window
+Components (PRD 4.3):
+  unique_reporters  35  independent citizens (log-scaled, 10+ = full marks; repeats by one citizen count once)
+  severity          30  worst severity across reports: low / medium / high / critical
+  context           20  road hierarchy (arterial road, busy junction) and proximity (<= 200 m)
+                        to schools, hospitals and transit hubs
+  days_elapsed      15  days since the first report (full marks at 30 days; frozen once an
+                        official claims a fix)
+
+Hazard flags (live wire, open drain, ...) still drive severity, routing and the
+escalation text; repeat failures are flagged separately. Neither adds points, so
+the score stays exactly the PRD formula.
 """
 
 from __future__ import annotations
@@ -15,31 +19,34 @@ import math
 from collections.abc import Iterable
 from datetime import datetime
 
-from ..domain import ClusterStatus, Hazard
+from ..domain import (
+    CONTEXT_PROXIMITY_M,
+    SCORE_DAYS_FOR_MAX,
+    SCORE_REPORTERS_FOR_MAX,
+    SCORE_WEIGHTS,
+    ClusterStatus,
+    Hazard,
+    severity_level,
+)
 from ..geo import ContextHit
 from ..schemas import ScoreBreakdown, ScoreComponent
 from .common import now_utc, parse_iso
 
-CONTEXT_POINTS = {
-    "school": (8, "school zone"),
-    "hospital": (7, "hospital access"),
-    "arterial_road": (6, "arterial road"),
-    "junction": (4, "busy junction"),
-    "bus_stand": (3, "bus stand footfall"),
-    "metro_station": (3, "metro station footfall"),
-    "metro_construction": (2, "metro work zone"),
+# Road hierarchy: the busiest road type near the issue counts once.
+ROAD_POINTS = {
+    "arterial_road": (10, "arterial road"),
+    "junction": (5, "busy junction"),
 }
 
-HAZARD_POINTS = {
-    Hazard.LIVE_WIRE: (10, "live wire"),
-    Hazard.OPEN_DRAIN: (8, "open drain / manhole"),
-    Hazard.TWO_WHEELER_SKID_RISK: (7, "two-wheeler skid risk"),
-    Hazard.WATERLOGGING: (4, "waterlogging"),
-    Hazard.PEDESTRIAN_RISK: (4, "pedestrian risk"),
-    Hazard.HEALTH_HAZARD: (4, "health hazard"),
-    Hazard.NIGHT_VISIBILITY: (3, "poor night visibility"),
-    Hazard.BLOCKING_TRAFFIC: (3, "blocking traffic"),
+# Sensitive places within CONTEXT_PROXIMITY_M; transit hubs count once.
+PROXIMITY_POINTS = {
+    "school": (5, "school"),
+    "hospital": (5, "hospital"),
+    "bus_stand": (4, "transit hub"),
+    "metro_station": (4, "transit hub"),
 }
+
+SEVERITY_SHARE = {"low": 0.25, "medium": 0.5, "high": 0.75, "critical": 1.0}
 
 # Hazard flags that duplicate context data when the model spots them itself.
 HAZARD_AS_CONTEXT = {
@@ -51,6 +58,34 @@ HAZARD_AS_CONTEXT = {
 }
 
 UNRESOLVED = {ClusterStatus.OPEN, ClusterStatus.IN_PROGRESS, ClusterStatus.CLOSURE_DISPUTED}
+CLOCK_STOPPED = {ClusterStatus.RESOLVED_PENDING_VERIFICATION, ClusterStatus.RESOLVED_VERIFIED}
+
+
+def _context(context: list[ContextHit], hazards: set[Hazard], weight: float) -> ScoreComponent:
+    seen: dict[str, str] = {}
+    for h in context:
+        if h.type in seen:
+            continue
+        if h.type in ROAD_POINTS or (h.type in PROXIMITY_POINTS and h.distance_m <= CONTEXT_PROXIMITY_M):
+            seen[h.type] = f"{h.name} ({h.distance_m:.0f} m)"
+    for flag, ctx_type in HAZARD_AS_CONTEXT.items():
+        if flag in hazards and ctx_type not in seen:
+            seen[ctx_type] = "reported by citizen"
+
+    road = next((t for t in ROAD_POINTS if t in seen), None)
+    pts = float(ROAD_POINTS[road][0]) if road else 0.0
+    reasons = [f"{ROAD_POINTS[road][1]}: {seen[road]}" if road else "residential street"]
+    transit_counted = False
+    for t, (p, what) in PROXIMITY_POINTS.items():
+        if t not in seen:
+            continue
+        if what == "transit hub":
+            if transit_counted:
+                continue
+            transit_counted = True
+        pts += p
+        reasons.append(f"{what} within {CONTEXT_PROXIMITY_M} m: {seen[t]}")
+    return ScoreComponent(component="context", points=round(min(weight, pts), 1), reason="; ".join(reasons))
 
 
 def compute_score(
@@ -62,57 +97,40 @@ def compute_score(
     created_at: str,
     sla_due_at: str,
     status: ClusterStatus,
-    repeat_failure: bool,
+    reporter_count: int | None = None,
+    resolved_at: str | None = None,
     now: datetime | None = None,
 ) -> ScoreBreakdown:
     now = now or now_utc()
+    w = SCORE_WEIGHTS
     comps: list[ScoreComponent] = []
 
-    n = max(1, report_count)
-    comps.append(ScoreComponent(component="corroboration", points=round(min(30.0, 10 * math.log2(1 + n)), 1), reason=f"{n} independent report{'s' if n != 1 else ''}"))
+    # Unique citizens, not raw reports: re-reporting the same issue does not inflate it.
+    n = max(1, reporter_count if reporter_count is not None else report_count)
+    share = min(1.0, math.log2(1 + n) / math.log2(1 + SCORE_REPORTERS_FOR_MAX))
+    reason = f"{n} independent citizen{'s' if n != 1 else ''}" if reporter_count is not None else f"{n} independent report{'s' if n != 1 else ''}"
+    if reporter_count is not None and report_count > n:
+        reason += f" ({report_count} reports)"
+    comps.append(ScoreComponent(component="unique_reporters", points=round(w["unique_reporters"] * share, 1), reason=reason))
 
     sev = max(1, min(5, max_severity))
-    comps.append(ScoreComponent(component="severity", points=round(sev / 5 * 30, 1), reason=f"max severity {sev}/5"))
+    level = severity_level(sev)
+    comps.append(ScoreComponent(component="severity", points=round(w["severity"] * SEVERITY_SHARE[level], 1), reason=f"{level} (worst report {sev}/5)"))
 
-    # Context: merge GIS hits with model flags, count each type once.
-    seen: dict[str, str] = {}
-    for h in context:
-        if h.type in CONTEXT_POINTS and h.type not in seen:
-            seen[h.type] = f"{h.name} ({h.distance_m} m)"
     hz = {Hazard(x) for x in hazards if x in Hazard._value2member_map_}
-    for flag, ctx_type in HAZARD_AS_CONTEXT.items():
-        if flag in hz and ctx_type not in seen:
-            seen[ctx_type] = "reported by citizen"
-    ctx_pts = 0.0
-    ctx_reasons = []
-    for ctx_type, label in seen.items():
-        pts, what = CONTEXT_POINTS[ctx_type]
-        ctx_pts += pts
-        ctx_reasons.append(f"{what}: {label}")
-    comps.append(ScoreComponent(component="context", points=min(20.0, ctx_pts), reason="; ".join(ctx_reasons) or "no sensitive zones nearby"))
+    comps.append(_context(context, hz, w["context"]))
 
-    hz_pts = 0.0
-    hz_reasons = []
-    for flag, (pts, what) in HAZARD_POINTS.items():
-        if flag in hz:
-            hz_pts += pts
-            hz_reasons.append(what)
-    comps.append(ScoreComponent(component="hazard", points=min(15.0, hz_pts), reason=", ".join(hz_reasons) or "no acute hazard flags"))
-
-    sla_pts, sla_reason = 0.0, "within service target"
-    if status in UNRESOLVED:
-        start, due = parse_iso(created_at), parse_iso(sla_due_at)
-        span = max((due - start).total_seconds(), 1.0)
-        frac = (now - start).total_seconds() / span
-        if frac >= 1:
-            overdue_h = (now - due).total_seconds() / 3600
-            sla_pts, sla_reason = 10.0, f"SLA breached by {overdue_h / 24:.1f} days" if overdue_h >= 24 else f"SLA breached by {overdue_h:.0f} h"
-        elif frac >= 0.5:
-            sla_pts, sla_reason = 5.0, "past 50% of service target"
-    comps.append(ScoreComponent(component="sla", points=sla_pts, reason=sla_reason))
-
-    if repeat_failure:
-        comps.append(ScoreComponent(component="repeat_failure", points=10.0, reason="failed again inside the repeat-failure window (possible warranty claim)"))
+    start = parse_iso(created_at)
+    stopped = status in CLOCK_STOPPED and bool(resolved_at)
+    end = parse_iso(resolved_at) if stopped else now  # type: ignore[arg-type]
+    days = max(0.0, (end - start).total_seconds() / 86400)
+    reason = f"{days:.1f} day{'s' if round(days, 1) != 1 else ''} since the first report"
+    if stopped:
+        reason += " (clock stopped at the official closure)"
+    elif status in UNRESOLVED and now > parse_iso(sla_due_at):
+        overdue_h = (now - parse_iso(sla_due_at)).total_seconds() / 3600
+        reason += f"; SLA breached by {overdue_h / 24:.1f} days" if overdue_h >= 24 else f"; SLA breached by {overdue_h:.0f} h"
+    comps.append(ScoreComponent(component="days_elapsed", points=round(w["days_elapsed"] * min(1.0, days / SCORE_DAYS_FOR_MAX), 1), reason=reason))
 
     total = round(min(100.0, sum(c.points for c in comps)), 1)
     return ScoreBreakdown(total=total, components=comps)

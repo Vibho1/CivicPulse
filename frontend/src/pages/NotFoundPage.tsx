@@ -1,13 +1,15 @@
 import { Link } from 'react-router-dom';
 import { EmptyState } from '../components/ui';
+import { useI18n } from '../i18n';
 
 export default function NotFoundPage() {
+  const { t } = useI18n();
   return (
     <div className="page narrow">
       <div className="card">
-        <EmptyState title="Page not found" body="That link doesn't go anywhere. Head back to the live map." icon="map">
+        <EmptyState title={t('notFound.title')} body={t('notFound.body')} icon="map">
           <Link to="/" className="btn btn-primary">
-            Back to map
+            {t('common.backToMap')}
           </Link>
         </EmptyState>
       </div>

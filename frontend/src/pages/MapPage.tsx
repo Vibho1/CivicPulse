@@ -4,9 +4,10 @@ import { AttributionControl, CircleMarker, MapContainer, Popup, TileLayer, useMa
 import { latLngBounds, type CircleMarker as LeafletCircleMarker } from 'leaflet';
 import { ALL_STATUSES, api, isClusterStatus, type CityStats, type Cluster, type ClusterStatus } from '../api';
 import { useApp } from '../context/AppContext';
+import { useI18n } from '../i18n';
 import { BENGALURU_CENTER, BENGALURU_ZOOM } from '../lib/geo';
-import { pct, plural, timeAgo } from '../lib/format';
-import { STATUS_COLORS, STATUS_SHORT } from '../lib/status';
+import { pct } from '../lib/format';
+import { STATUS_COLORS, STATUS_SHORT, normalizeCategory } from '../lib/status';
 import { useAsync } from '../lib/useAsync';
 import { Icon } from '../components/Icon';
 import { AgencyChip, EmptyState, ErrorState, ScoreRing, Skeleton, SlaBadge, StatusBadge } from '../components/ui';
@@ -50,22 +51,25 @@ function MapController({ clusters, fitKey, focus }: { clusters: Cluster[]; fitKe
 }
 
 function StatsStrip({ stats, loading }: { stats: CityStats | null; loading: boolean }) {
+  const { meta } = useApp();
+  const { t } = useI18n();
+  const repeatDays = meta?.repeat_failure_window_days ?? 180;
   const items: { label: string; value: string; tone?: string; hint: string }[] = stats
     ? [
-        { label: 'Unresolved issues', value: String(stats.unresolved), hint: 'Open, in progress or disputed' },
-        { label: 'Closures', value: String(stats.closures), hint: 'Marked resolved by an official' },
+        { label: t('stats.unresolved'), value: String(stats.unresolved), hint: t('stats.unresolvedHint') },
+        { label: t('stats.closures'), value: String(stats.closures), hint: t('stats.closuresHint') },
         {
-          label: 'Unverified closures',
+          label: t('stats.unverified'),
           value: pct(stats.unverified_closure_rate),
           tone: (stats.unverified_closure_rate ?? 0) >= 50 ? 'bad' : 'warn',
-          hint: 'Closed on paper, no citizen-verified proof',
+          hint: t('stats.unverifiedHint'),
         },
-        { label: 'SLA-breached open', value: String(stats.sla_breached_open), tone: stats.sla_breached_open > 0 ? 'bad' : undefined, hint: 'Still open past the service target' },
-        { label: 'Repeat failures', value: String(stats.repeat_failures), tone: stats.repeat_failures > 0 ? 'warn' : undefined, hint: 'Failed again within 180 days of a verified fix' },
+        { label: t('stats.slaBreached'), value: String(stats.sla_breached_open), tone: stats.sla_breached_open > 0 ? 'bad' : undefined, hint: t('stats.slaBreachedHint') },
+        { label: t('stats.repeat'), value: String(stats.repeat_failures), tone: stats.repeat_failures > 0 ? 'warn' : undefined, hint: t('stats.repeatHint', { days: repeatDays }) },
       ]
     : [];
   return (
-    <section className="stats" aria-label="City summary">
+    <section className="stats" aria-label={t('stats.aria')}>
       {loading && !stats
         ? Array.from({ length: 5 }, (_, i) => (
             <div key={i} className="stat">
@@ -84,6 +88,7 @@ function StatsStrip({ stats, loading }: { stats: CityStats | null; loading: bool
 }
 
 function IssueRow({ cluster, onLocate }: { cluster: Cluster; onLocate: (c: Cluster) => void }) {
+  const { t, fmt, label } = useI18n();
   return (
     <li className={`issue-row${cluster.repeat_failure ? ' repeat' : ''}`}>
       <Link to={`/clusters/${cluster.id}`} className="issue-main">
@@ -91,24 +96,24 @@ function IssueRow({ cluster, onLocate }: { cluster: Cluster; onLocate: (c: Clust
         <div className="issue-text">
           <div className="issue-title">{cluster.title}</div>
           <div className="issue-sub">
-            <Icon name="pin" size={12} /> {cluster.ward}
-            {cluster.zone ? <span className="muted"> · {cluster.zone}</span> : null}
-            <span className="muted"> · {plural(cluster.report_count, 'report')}</span>
-            <span className="muted"> · {timeAgo(cluster.created_at)}</span>
+            <Icon name="pin" size={12} /> {fmt.ward(cluster.ward)}
+            {cluster.zone ? <span className="muted"> · {label('zone', cluster.zone, cluster.zone)}</span> : null}
+            <span className="muted"> · {fmt.count('report', cluster.report_count)}</span>
+            <span className="muted"> · {fmt.timeAgo(cluster.created_at)}</span>
           </div>
           <div className="issue-chips">
-            <StatusBadge status={cluster.status} label={STATUS_SHORT[cluster.status]} size="sm" />
-            <AgencyChip short={cluster.agency_short} label={cluster.agency_label} reason={cluster.agency_reason} />
+            <StatusBadge status={cluster.status} short size="sm" />
+            <AgencyChip agency={cluster.agency} short={cluster.agency_short} label={cluster.agency_label} reason={cluster.agency_reason} />
             <SlaBadge cluster={cluster} />
             {cluster.repeat_failure ? (
               <span className="chip chip-bad">
-                <Icon name="flag" size={12} /> Repeat failure
+                <Icon name="flag" size={12} /> {t('common.repeatFailure')}
               </span>
             ) : null}
           </div>
         </div>
       </Link>
-      <button type="button" className="icon-btn locate" onClick={() => onLocate(cluster)} aria-label={`Show ${cluster.title} on the map`} title="Show on map">
+      <button type="button" className="icon-btn locate" onClick={() => onLocate(cluster)} aria-label={t('map.locateAria', { title: cluster.title })} title={t('map.locate')}>
         <Icon name="crosshair" size={18} />
       </button>
     </li>
@@ -117,15 +122,21 @@ function IssueRow({ cluster, onLocate }: { cluster: Cluster; onLocate: (c: Clust
 
 export default function MapPage() {
   const { meta, dataVersion } = useApp();
+  const { t, tx, fmt, label } = useI18n();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const ward = searchParams.get('ward') ?? '';
-  const category = searchParams.get('category') ?? '';
+  // Old links may still carry pre-PRD category ids (e.g. 'garbage').
+  const category = normalizeCategory(searchParams.get('category') ?? '');
   const statusParam = searchParams.get('status') ?? '';
   const statuses = useMemo(() => statusParam.split(',').filter(isClusterStatus), [statusParam]);
+  const slaOnly = searchParams.get('sla') === 'breached';
 
-  const clustersQ = useAsync(() => api.clusters({ status: statuses, ward, category, limit: 500 }), [statusParam, ward, category, dataVersion]);
+  const clustersQ = useAsync(
+    () => api.clusters({ status: statuses, ward, category, sla_breached: slaOnly || undefined, limit: 500 }),
+    [statusParam, ward, category, slaOnly, dataVersion],
+  );
   const statsQ = useAsync(() => api.stats(), [dataVersion]);
 
   const [focus, setFocus] = useState<Cluster | null>(null);
@@ -139,6 +150,10 @@ export default function MapPage() {
     if (ward) names.add(ward);
     return [...names].sort((a, b) => a.localeCompare(b));
   }, [meta, clusters, ward]);
+
+  const categories = meta?.categories ?? [];
+  const prdCategories = categories.filter((c) => c.prd);
+  const otherCategories = categories.filter((c) => !c.prd);
 
   function updateParams(mutate: (p: URLSearchParams) => void) {
     const next = new URLSearchParams(searchParams);
@@ -157,13 +172,17 @@ export default function MapPage() {
     });
   }
 
+  function toggleSla() {
+    updateParams((p) => (slaOnly ? p.delete('sla') : p.set('sla', 'breached')));
+  }
+
   function locate(c: Cluster) {
     setFocus(c);
     window.setTimeout(() => markerRefs.current.get(c.id)?.openPopup(), 900);
     if (window.innerWidth < 960) document.getElementById('live-map')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
-  const hasFilters = Boolean(ward || category || statuses.length);
+  const hasFilters = Boolean(ward || category || statuses.length || slaOnly);
   const fitKey = ward ? `ward:${ward}` : '';
 
   return (
@@ -171,9 +190,9 @@ export default function MapPage() {
       <StatsStrip stats={statsQ.data} loading={statsQ.loading} />
 
       <div className="map-layout">
-        <section className="map-panel card" aria-label="Live map">
+        <section className="map-panel card" aria-label={t('map.aria')}>
           <div className="filters">
-            <div className="chips status-filter" role="group" aria-label="Filter by status">
+            <div className="chips status-filter" role="group" aria-label={t('map.filterStatus')}>
               {ALL_STATUSES.map((s) => {
                 const active = statuses.length === 0 || statuses.includes(s);
                 return (
@@ -183,33 +202,57 @@ export default function MapPage() {
                     className={`chip chip-toggle status-${s}${active ? ' active' : ''}`}
                     aria-pressed={statuses.includes(s)}
                     onClick={() => toggleStatus(s)}
+                    title={t(`statusHint.${s}`)}
                   >
                     <span className="dot" aria-hidden="true" />
-                    {STATUS_SHORT[s]}
+                    {label('statusShort', s, STATUS_SHORT[s])}
                   </button>
                 );
               })}
+              <span className="filter-sep" aria-hidden="true" />
+              <button type="button" className={`chip chip-toggle chip-sla${slaOnly ? ' active' : ''}`} aria-pressed={slaOnly} onClick={toggleSla} title={t('map.slaBreachedTitle')}>
+                <Icon name="clock" size={13} /> {t('map.slaBreached')}
+              </button>
             </div>
             <div className="filter-selects">
-              <select className="select" aria-label="Category" value={category} onChange={(e) => updateParams((p) => (e.target.value ? p.set('category', e.target.value) : p.delete('category')))}>
-                <option value="">All categories</option>
-                {(meta?.categories ?? []).map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.label}
-                  </option>
-                ))}
+              <select className="select" aria-label={t('map.category')} value={category} onChange={(e) => updateParams((p) => (e.target.value ? p.set('category', e.target.value) : p.delete('category')))}>
+                <option value="">{t('map.allCategories')}</option>
+                {prdCategories.length ? (
+                  <>
+                    <optgroup label={t('map.categoryGroupPrd')}>
+                      {prdCategories.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {label('category', c.id, c.label)}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label={t('map.categoryGroupMore')}>
+                      {otherCategories.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {label('category', c.id, c.label)}
+                        </option>
+                      ))}
+                    </optgroup>
+                  </>
+                ) : (
+                  categories.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {label('category', c.id, c.label)}
+                    </option>
+                  ))
+                )}
               </select>
-              <select className="select" aria-label="Ward" value={ward} onChange={(e) => updateParams((p) => (e.target.value ? p.set('ward', e.target.value) : p.delete('ward')))}>
-                <option value="">All wards</option>
+              <select className="select" aria-label={t('map.ward')} value={ward} onChange={(e) => updateParams((p) => (e.target.value ? p.set('ward', e.target.value) : p.delete('ward')))}>
+                <option value="">{t('map.allWards')}</option>
                 {wardOptions.map((w) => (
                   <option key={w} value={w}>
-                    {w}
+                    {fmt.ward(w)}
                   </option>
                 ))}
               </select>
               {hasFilters ? (
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSearchParams({}, { replace: true })} aria-label="Clear filters">
-                  <Icon name="x" size={14} /> <span className="hide-sm">Clear</span>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSearchParams({}, { replace: true })} aria-label={t('map.clearFilters')}>
+                  <Icon name="x" size={14} /> <span className="hide-sm">{t('map.clear')}</span>
                 </button>
               ) : null}
             </div>
@@ -242,17 +285,17 @@ export default function MapPage() {
                           <div className="popup-title">{c.title}</div>
                           <div className="popup-row">
                             <StatusBadge status={c.status} size="sm" />
-                            {c.repeat_failure ? <span className="chip chip-bad">Repeat failure</span> : null}
+                            {c.repeat_failure ? <span className="chip chip-bad">{t('common.repeatFailure')}</span> : null}
                           </div>
                           <div className="popup-row muted">
-                            Impact <strong>{Math.round(c.impact_score)}</strong> · {plural(c.report_count, 'report')} · {c.agency_short}
+                            {tx('map.popupImpact', { score: <strong>{Math.round(c.impact_score)}</strong> })} · {fmt.count('report', c.report_count)} · {label('agency', c.agency, c.agency_short)}
                           </div>
                           <div className="popup-row muted">
-                            {c.ward}
+                            {fmt.ward(c.ward)}
                             {c.landmark ? ` · ${c.landmark}` : ''}
                           </div>
                           <Link to={`/clusters/${c.id}`} className="btn btn-primary btn-sm popup-btn">
-                            Open <Icon name="chevron-right" size={14} />
+                            {t('common.open')} <Icon name="chevron-right" size={14} />
                           </Link>
                         </div>
                       </Popup>
@@ -262,27 +305,27 @@ export default function MapPage() {
               })}
             </MapContainer>
 
-            <div className="legend" aria-label="Legend">
+            <div className="legend" aria-label={t('map.legend')}>
               {ALL_STATUSES.map((s) => (
                 <span key={s} className="legend-item">
-                  <span className="legend-dot" style={{ background: STATUS_COLORS[s] }} /> {STATUS_SHORT[s]}
+                  <span className="legend-dot" style={{ background: STATUS_COLORS[s] }} /> {label('statusShort', s, STATUS_SHORT[s])}
                 </span>
               ))}
               <span className="legend-item">
-                <span className="legend-dot legend-repeat" /> Repeat failure
+                <span className="legend-dot legend-repeat" /> {t('common.repeatFailure')}
               </span>
-              <span className="legend-item muted">Size = impact score</span>
+              <span className="legend-item muted">{t('map.legendSize')}</span>
             </div>
-            {clustersQ.loading && clusters.length > 0 ? <div className="map-loading">Updating…</div> : null}
+            {clustersQ.loading && clusters.length > 0 ? <div className="map-loading">{t('common.updating')}</div> : null}
           </div>
         </section>
 
-        <aside className="side card" aria-label="Top issues">
+        <aside className="side card" aria-label={t('map.topIssues')}>
           <div className="side-head">
             <h2>
-              Top issues <span className="count">{clusters.length}</span>
+              {t('map.topIssues')} <span className="count">{clusters.length}</span>
             </h2>
-            <span className="muted small">Ranked by impact score</span>
+            <span className="muted small">{t('map.ranked')}</span>
           </div>
 
           {clustersQ.error && !clustersQ.data ? (
@@ -301,14 +344,14 @@ export default function MapPage() {
               ))}
             </ul>
           ) : clusters.length === 0 ? (
-            <EmptyState title={hasFilters ? 'No issues match these filters' : 'No issues yet'} body={hasFilters ? 'Try clearing a filter.' : 'Seed demo data from the Demo menu, or file the first report.'}>
+            <EmptyState title={hasFilters ? t('map.emptyFiltered') : t('map.empty')} body={hasFilters ? t('map.emptyFilteredBody') : t('map.emptyBody')}>
               {hasFilters ? (
                 <button type="button" className="btn btn-ghost" onClick={() => setSearchParams({}, { replace: true })}>
-                  Clear filters
+                  {t('map.clearFilters')}
                 </button>
               ) : null}
               <button type="button" className="btn btn-primary" onClick={() => navigate('/report')}>
-                <Icon name="plus-circle" size={16} /> Report an issue
+                <Icon name="plus-circle" size={16} /> {t('report.title')}
               </button>
             </EmptyState>
           ) : (

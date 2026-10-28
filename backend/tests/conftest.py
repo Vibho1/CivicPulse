@@ -45,6 +45,28 @@ def jpeg() -> bytes:
 
 
 @pytest.fixture()
+def gps_jpeg():
+    """Factory: JPEG bytes carrying EXIF GPS for (lat, lng), like a phone camera photo."""
+    from PIL import Image
+
+    def dms(x: float) -> tuple[int, int, float]:
+        x = abs(x)
+        d = int(x)
+        m = int((x - d) * 60)
+        return d, m, round(((x - d) * 60 - m) * 60, 4)
+
+    def make(lat: float, lng: float) -> bytes:
+        im = Image.new("RGB", (64, 48), (120, 120, 120))
+        exif = Image.Exif()
+        exif[0x8825] = {1: "N" if lat >= 0 else "S", 2: dms(lat), 3: "E" if lng >= 0 else "W", 4: dms(lng)}
+        out = io.BytesIO()
+        im.save(out, format="JPEG", exif=exif)
+        return out.getvalue()
+
+    return make
+
+
+@pytest.fixture()
 def client(tmp_path: Path, store: Store, ai: ResilientAI):
     from fastapi.testclient import TestClient
 

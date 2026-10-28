@@ -1,3 +1,5 @@
+import { readPhotoExif, type PhotoExif } from './exif';
+
 export interface PreparedPhoto {
   blob: Blob;
   url: string;
@@ -5,6 +7,8 @@ export interface PreparedPhoto {
   height: number;
   originalName: string;
   originalBytes: number;
+  /** EXIF presence / GPS of the ORIGINAL file (the re-encoded `blob` has none). */
+  exif: PhotoExif;
 }
 
 async function loadBitmap(file: Blob): Promise<ImageBitmap | HTMLImageElement> {
@@ -34,9 +38,12 @@ async function loadBitmap(file: Blob): Promise<ImageBitmap | HTMLImageElement> {
 /**
  * Downscale an image to `maxSide` px on its longest edge and re-encode as JPEG.
  * Keeps uploads small on mobile data; the backend normalises again anyway.
+ * The re-encode drops all metadata, so the original's EXIF (presence + GPS) is
+ * read first and returned as `exif` for the caller to send alongside.
  */
 export async function preparePhoto(file: File | Blob, maxSide = 1280, quality = 0.85): Promise<PreparedPhoto> {
-  const source = await loadBitmap(file);
+  // readPhotoExif never rejects; it only looks at the original file's bytes.
+  const [exif, source] = await Promise.all([readPhotoExif(file), loadBitmap(file)]);
   const srcW = source.width;
   const srcH = source.height;
   const scale = Math.min(1, maxSide / Math.max(srcW, srcH));
@@ -61,6 +68,7 @@ export async function preparePhoto(file: File | Blob, maxSide = 1280, quality = 
     height: h,
     originalName: file instanceof File ? file.name : 'photo.jpg',
     originalBytes: file.size,
+    exif,
   };
 }
 

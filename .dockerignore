@@ -1,0 +1,17 @@
+# Keep the Docker build context small and free of secrets, local data and host-built binaries
+# (a host frontend/node_modules would overwrite the image's Alpine install and break the build).
+.git
+**/.env
+**/.env.*
+!**/.env.example
+**/node_modules
+frontend/dist
+backend/.venv
+backend/data
+deploy/terraform
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.ruff_cache
+**/.DS_Store
+**/*.swp

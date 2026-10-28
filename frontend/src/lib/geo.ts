@@ -1,4 +1,5 @@
 import type { Ward } from '../api';
+import { getLang, translate } from '../i18n';
 
 export const BENGALURU_CENTER: [number, number] = [12.9716, 77.5946];
 export const BENGALURU_ZOOM = 12;
@@ -40,22 +41,23 @@ export function isValidLatLng(lat: number, lng: number): boolean {
 }
 
 function geoErrorMessage(err: GeolocationPositionError): string {
+  const lang = getLang();
   switch (err.code) {
     case err.PERMISSION_DENIED:
-      return 'Location permission denied. Pick a preset or tap the map instead.';
+      return translate(lang, 'geo.denied');
     case err.POSITION_UNAVAILABLE:
-      return 'Location unavailable right now. Pick a preset or tap the map instead.';
+      return translate(lang, 'geo.unavailable');
     case err.TIMEOUT:
-      return 'Timed out waiting for GPS. Pick a preset or tap the map instead.';
+      return translate(lang, 'geo.timeout');
     default:
-      return err.message || 'Could not get your location.';
+      return lang === 'en' && err.message ? err.message : translate(lang, 'location.error');
   }
 }
 
 export function getPosition(timeoutMs = 10_000): Promise<GeolocationPosition> {
   return new Promise((resolve, reject) => {
     if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
-      reject(new Error('Geolocation is not available in this browser.'));
+      reject(new Error(translate(getLang(), 'geo.unsupported')));
       return;
     }
     navigator.geolocation.getCurrentPosition(resolve, (err) => reject(new Error(geoErrorMessage(err))), {
@@ -64,4 +66,49 @@ export function getPosition(timeoutMs = 10_000): Promise<GeolocationPosition> {
       maximumAge: 30_000,
     });
   });
+}
+
+/**
+ * `getPosition` that resolves null instead of rejecting. Adds a hard deadline:
+ * the browser's own timeout does not count time spent on the permission prompt.
+ */
+export function tryGetPosition(timeoutMs = 6000): Promise<GeolocationPosition | null> {
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => resolve(null), timeoutMs + 1500);
+    getPosition(timeoutMs).then(
+      (pos) => {
+        window.clearTimeout(timer);
+        resolve(pos);
+      },
+      () => {
+        window.clearTimeout(timer);
+        resolve(null);
+      },
+    );
+  });
+}
+
+/** Phones and tablets (coarse pointer), where the browser position is usually real GPS. */
+export function isTouchDevice(): boolean {
+  try {
+    return typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+  } catch {
+    return false;
+  }
+}
+
+/** Worst device accuracy (m) still sent as a proof photo's capture location. */
+export const PROOF_MAX_ACCURACY_M = 100;
+
+/**
+ * Device position to send with a closure/verification photo, or null. Only touch
+ * devices with a fix of ≤ 100 m qualify: desktop browsers report Wi-Fi/IP guesses
+ * that would get a demo flagged as the wrong spot. The photo's own EXIF GPS still
+ * wins on the server. Never rejects.
+ */
+export async function proofPosition(timeoutMs = 6000): Promise<{ lat: number; lng: number; accuracy: number } | null> {
+  if (!isTouchDevice()) return null;
+  const pos = await tryGetPosition(timeoutMs);
+  if (!pos || !(pos.coords.accuracy <= PROOF_MAX_ACCURACY_M)) return null;
+  return { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy };
 }

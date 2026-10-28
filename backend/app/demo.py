@@ -7,9 +7,11 @@ them), so the dashboard tells the full story even offline:
 * ORR service-lane pothole: 4 reports in 3 languages, routed to BWSSB
   because of a visible pipeline trench, SLA breached, in progress.
 * Koramangala: official closed it with a photo of a different spot ->
-  closure disputed by the AI check.
-* Jayanagar: cosmetic gravel patch -> closure disputed.
+  Unverified closure by the AI check.
+* Jayanagar: cosmetic gravel patch -> Unverified closure.
 * HSR Layout: a verified fix that failed again -> repeat failure flagged.
+* Ward 150 Bellandur: unrestored BESCOM cable trench closed with loose soil ->
+  Unverified closure (with the ORR pothole, it fills the ward escalation package).
 * Verified closures, pending closures, and a no-proof closure for the
   ward scorecard.
 """
@@ -24,7 +26,7 @@ from .ai.base import Media
 from .ai.heuristic import HeuristicAI
 from .demo_photos import have_real_photos, photo_bytes
 from .domain import Agency, Category, ClusterStatus, Hazard, Verdict
-from .schemas import EvidenceFlags, Extraction, VerificationResult
+from .schemas import Dimensions, EvidenceFlags, Extraction, VerificationResult
 from .services import closure
 from .services.common import now_utc, to_iso
 from .services.intake import ingest, refresh_scores
@@ -86,9 +88,11 @@ def seed_demo(store: Store, uploads_dir: Path, reset: bool = True) -> dict:
         return Media(photo_bytes(name), "image/jpeg", name) if name else None
 
     def report(lat, lng, extraction, when, photo_name=None, reporter=None, text=None):
+        # Seed photos are placeholders without camera EXIF: do not flag them as forwarded/stock.
         return ingest(
             store, ai, lat=lat, lng=lng, uploads_dir=uploads_dir, text=text, photo=photo(photo_name),
             reporter_id=reporter, extraction_override=extraction, ai_mode_override="gemini (seeded)", created_at=when,
+            check_photo_provenance=False,
         )
 
     created: list[str] = []
@@ -168,7 +172,7 @@ def seed_demo(store: Store, uploads_dir: Path, reset: bool = True) -> dict:
     created.append(report(12.97190, 77.64120, _ex(
         transcript="100 feet road alli CMH road junction hatra street light 4 days inda off ide, raatri tumba dark.",
         transcript_english="On 100 Feet Road near the CMH Road junction the streetlight has been off for 4 days; it is very dark at night.",
-        language="kn-en", category=C.STREETLIGHT, severity=3, title="Streetlight out on 100 Ft Road near CMH Road junction",
+        language="kn-en", category=C.STREETLIGHT_OUTAGE, severity=3, title="Streetlight out on 100 Ft Road near CMH Road junction",
         description="Streetlight pole dark for several nights on a busy commercial stretch.", landmark="CMH Road junction, Indiranagar",
         hazards=[H.NIGHT_VISIBILITY, H.PEDESTRIAN_RISK, H.ARTERIAL_ROAD], confidence=0.87,
     ), ts(days=4, hours=7), "ind_streetlight", "citizen-farah").cluster["id"])
@@ -177,16 +181,16 @@ def seed_demo(store: Store, uploads_dir: Path, reset: bool = True) -> dict:
     r = report(12.91160, 77.63890, _ex(
         transcript="27th main 14th cross corner alli garbage black spot agide, naayigalu ellaa haradtive.",
         transcript_english="The 27th Main and 14th Cross corner has become a garbage black spot; dogs are scattering it everywhere.",
-        language="kn-en", category=C.GARBAGE, severity=3, title="Garbage black spot at 27th Main / 14th Cross, HSR Layout",
+        language="kn-en", category=C.GARBAGE_DUMP, severity=3, title="Garbage black spot at 27th Main / 14th Cross, HSR Layout",
         description="Heap of mixed waste bags at the street corner next to a grey compound wall with a no-dumping sign.",
         landmark="27th Main & 14th Cross, HSR Layout", hazards=[H.HEALTH_HAZARD], confidence=0.9,
     ), ts(days=8, hours=4), "hsr_garbage_before", "citizen-nikhil")
     hsr_g = r.cluster["id"]
     created.append(hsr_g)
-    report(12.91166, 77.63884, _ex(transcript="Garbage dumped again at the 27th main corner, stinks badly.", language="en", category=C.GARBAGE, severity=3,
+    report(12.91166, 77.63884, _ex(transcript="Garbage dumped again at the 27th main corner, stinks badly.", language="en", category=C.GARBAGE_DUMP, severity=3,
                                       title="Garbage black spot at 27th Main / 14th Cross, HSR Layout", description="Garbage dumped again; strong smell.",
                                       landmark="27th Main, HSR Layout", hazards=[H.HEALTH_HAZARD], confidence=0.85), ts(days=7, hours=9), None, "citizen-pooja")
-    report(12.91155, 77.63896, _ex(transcript="Black spot at 27th main corner, kids walk past this to school.", language="en", category=C.GARBAGE, severity=3,
+    report(12.91155, 77.63896, _ex(transcript="Black spot at 27th main corner, kids walk past this to school.", language="en", category=C.GARBAGE_DUMP, severity=3,
                                       title="Garbage black spot at 27th Main / 14th Cross, HSR Layout", description="Children walk past the dump on the way to school.",
                                       landmark="27th Main, HSR Layout", hazards=[H.HEALTH_HAZARD, H.NEAR_SCHOOL], confidence=0.85), ts(days=7, hours=2), None, "citizen-ahmed")
     closure.resolve(store, ai, store.get_cluster(hsr_g), uploads_dir=uploads_dir, after_photo=photo("hsr_garbage_after"), note="Spot cleared and sanitised; bins placed.",
@@ -304,20 +308,20 @@ def seed_demo(store: Store, uploads_dir: Path, reset: bool = True) -> dict:
 
     # ------------------------------------------------- 13. Electronic City footpath
     created.append(report(12.84520, 77.66020, _ex(
-        transcript="Footpath slabs broken outside the IT park gate, open drain visible, people walk on the road instead.", language="en", category=C.FOOTPATH_DAMAGE, severity=2,
+        transcript="Footpath slabs broken outside the IT park gate, open drain visible, people walk on the road instead.", language="en", category=C.DAMAGED_FOOTPATH, severity=2,
         title="Broken footpath slabs outside IT park gate, Electronic City", description="Several slabs missing exposing the drain; pedestrians forced onto the road.", landmark="IT park gate, Electronic City Phase 1",
         hazards=[H.PEDESTRIAN_RISK, H.OPEN_DRAIN], confidence=0.88,
     ), ts(days=10, hours=3), "ecity_footpath", "citizen-leela").cluster["id"])
 
     # ------------------------------------------------- 14. Shivajinagar garbage verified
     r = report(12.98570, 77.60570, _ex(
-        transcript="Garbage piling up near the market wall on Broadway road, not collected for 3 days.", language="en", category=C.GARBAGE, severity=3,
+        transcript="Garbage piling up near the market wall on Broadway road, not collected for 3 days.", language="en", category=C.GARBAGE_DUMP, severity=3,
         title="Uncollected garbage near market wall, Broadway Road", description="Garbage pile at the base of the market wall; collection missed for days.", landmark="Broadway Road market, Shivajinagar",
         hazards=[H.HEALTH_HAZARD], confidence=0.9,
     ), ts(days=12, hours=5), "shiv_garbage_before", "citizen-irfan")
     shiv = r.cluster["id"]
     created.append(shiv)
-    report(12.98576, 77.60564, _ex(transcript="Market wall garbage still there, smell unbearable.", language="en", category=C.GARBAGE, severity=3, title="Uncollected garbage near market wall, Broadway Road",
+    report(12.98576, 77.60564, _ex(transcript="Market wall garbage still there, smell unbearable.", language="en", category=C.GARBAGE_DUMP, severity=3, title="Uncollected garbage near market wall, Broadway Road",
                                       description="Still uncollected.", landmark="Broadway Road", hazards=[H.HEALTH_HAZARD], confidence=0.85), ts(days=11, hours=4), None, "citizen-joseph")
     closure.resolve(store, ai, store.get_cluster(shiv), uploads_dir=uploads_dir, after_photo=photo("shiv_garbage_after"), note="Cleared; auto-tipper route corrected.", actor="swm-jhi-shivajinagar", ts=ts(days=10, hours=2),
                     result_override=_verdict(Verdict.VERIFIED, "Same wall and street; the garbage pile has been removed and the base of the wall is clean.", same=True, fixed=True, quality="proper", matched=["market wall", "street layout"]))
@@ -326,7 +330,7 @@ def seed_demo(store: Store, uploads_dir: Path, reset: bool = True) -> dict:
 
     # ------------------------------------------------- 15. Mahadevapura streetlight verified
     r = report(12.99000, 77.69700, _ex(
-        transcript="Street light near the park in Mahadevapura layout 2nd cross not working for a week.", language="en", category=C.STREETLIGHT, severity=2,
+        transcript="Street light near the park in Mahadevapura layout 2nd cross not working for a week.", language="en", category=C.STREETLIGHT_OUTAGE, severity=2,
         title="Streetlight out on 2nd Cross near park, Mahadevapura", description="Residential lane dark at night for a week.", landmark="2nd Cross park, Mahadevapura",
         hazards=[H.NIGHT_VISIBILITY], confidence=0.88,
     ), ts(days=6, hours=8), "mhd_light_before", "citizen-bhavana")
@@ -340,7 +344,7 @@ def seed_demo(store: Store, uploads_dir: Path, reset: bool = True) -> dict:
     # ------------------------------------------------- 16-18. a few more open issues for the map
     created.append(report(12.92400, 77.67300, _ex(
         transcript="Bellandur lake road alli construction debris dump madidare, half road block.", transcript_english="On Bellandur lake road someone has dumped construction debris, half the road is blocked.",
-        language="kn-en", category=C.GARBAGE, severity=3, title="Construction debris dumped on Bellandur lake road", description="Debris blocking half the road near the lake bund.", landmark="Bellandur lake road",
+        language="kn-en", category=C.GARBAGE_DUMP, severity=3, title="Construction debris dumped on Bellandur lake road", description="Debris blocking half the road near the lake bund.", landmark="Bellandur lake road",
         hazards=[H.BLOCKING_TRAFFIC], confidence=0.86,
     ), ts(days=3, hours=2), None, "citizen-sunil").cluster["id"])
     created.append(report(12.96980, 77.75000, _ex(
@@ -354,11 +358,39 @@ def seed_demo(store: Store, uploads_dir: Path, reset: bool = True) -> dict:
         hazards=[H.OPEN_DRAIN, H.PEDESTRIAN_RISK, H.NIGHT_VISIBILITY, H.TWO_WHEELER_SKID_RISK], confidence=0.94,
     ), ts(hours=20), None, "citizen-rekha").cluster["id"])
 
+    # ------------------------------------------------- 19. Bellandur unrestored BESCOM trench, cosmetic closure
+    r = report(12.93010, 77.67810, _ex(
+        transcript="Sakra hospital road alli BESCOM cable haakoke agedidru, trench innu sari maadilla, bike-galu jaarutive.",
+        transcript_english="On Sakra Hospital Road they dug a trench for BESCOM cables and still have not restored it; bikes are slipping.",
+        language="kn-en", category=C.UNRESTORED_UTILITY_TRENCH, severity=4,
+        title="Unrestored BESCOM cable trench on Sakra Hospital Road, Bellandur",
+        description="A long cable trench along the carriageway edge was backfilled with loose soil and never resurfaced; two-wheelers slip on the sunken strip.",
+        landmark="Sakra Hospital Road, Bellandur", size_estimate="~30 m long, 60 cm wide, sunk 10 cm",
+        estimated_dimensions_cm=Dimensions(length=3000, width=60, depth=10),
+        hazards=[H.RECENT_DIGGING, H.TWO_WHEELER_SKID_RISK, H.NEAR_HOSPITAL],
+        evidence=EvidenceFlags(recent_digging=True, utility_work_type="power_cable", photo_provided=True, photo_usable=True),
+        suggested_agency=A.BESCOM, agency_reasoning="Fresh cable trench with BESCOM duct markers: BESCOM must restore its road cut.", confidence=0.9,
+    ), ts(days=9, hours=2), "bel_trench_roaddamage", "citizen-shalini")
+    bel = r.cluster["id"]
+    created.append(bel)
+    report(12.93016, 77.67804, _ex(
+        transcript="Cable trench near Sakra hospital gate still sunk, my scooter slipped yesterday.", language="en",
+        category=C.UNRESTORED_UTILITY_TRENCH, severity=4, title="Unrestored BESCOM cable trench on Sakra Hospital Road, Bellandur",
+        description="Scooter slipped on the sunken trench strip near the hospital gate.", landmark="Sakra Hospital gate",
+        hazards=[H.RECENT_DIGGING, H.TWO_WHEELER_SKID_RISK],
+        evidence=EvidenceFlags(recent_digging=True, utility_work_type="power_cable", photo_provided=True, photo_usable=True), confidence=0.86,
+    ), ts(days=7, hours=5), None, "citizen-vinay")
+    closure.resolve(store, ai, store.get_cluster(bel), uploads_dir=uploads_dir, after_photo=photo("bel_trench_after_cosmetic"), note="Trench closed.", actor="bescom-aee-bellandur", ts=ts(days=2, hours=6),
+                    result_override=_verdict(Verdict.UNVERIFIED_COSMETIC, "Same stretch: the hospital boundary wall and the BESCOM duct marker posts match. The trench has only been topped up with loose soil and gravel; there is no compacted asphalt, so the strip will sink again with the next rain.", same=True, fixed=False, quality="cosmetic", matched=["hospital boundary wall", "BESCOM duct markers"], mismatch=["loose soil instead of asphalt"]))
+
     refresh_scores(store)
     return {
         "status": "seeded",
         "clusters": len(created),
         "counts": store.counts(),
         "real_photos": have_real_photos(),
-        "highlights": {"orr_pothole": orr, "koramangala_fake_closure": kor, "jayanagar_cosmetic": jay, "agara_repeat_failure": agara_new, "silk_board": silk},
+        "highlights": {
+            "orr_pothole": orr, "koramangala_fake_closure": kor, "jayanagar_cosmetic": jay, "agara_repeat_failure": agara_new,
+            "silk_board": silk, "bellandur_trench": bel,
+        },
     }

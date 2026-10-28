@@ -3,16 +3,18 @@ citizen verification and dispute handling."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..ai import ResilientAI
 from ..ai.base import Media
-from ..domain import CATEGORY_LABELS, Category, ClusterStatus, Verdict
-from ..geo import normalise_photo
+from ..domain import CATEGORY_LABELS, VERIFY_GPS_RADIUS_M, Category, ClusterStatus, Verdict
+from ..geo import blur_regions, extract_exif_gps, haversine_m, normalise_photo
 from ..schemas import VerificationResult
 from ..store import Store
 from .common import new_id, now_iso
 from .intake import rescore
+from .notify import Notifier, request_verification
 
 RESOLVABLE = {ClusterStatus.OPEN, ClusterStatus.IN_PROGRESS, ClusterStatus.CLOSURE_DISPUTED}
 VERIFIABLE = {ClusterStatus.RESOLVED_PENDING_VERIFICATION, ClusterStatus.CLOSURE_DISPUTED}
@@ -20,6 +22,81 @@ VERIFIABLE = {ClusterStatus.RESOLVED_PENDING_VERIFICATION, ClusterStatus.CLOSURE
 
 class InvalidTransition(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class GpsCheck:
+    """Where a proof photo was taken, relative to the issue."""
+
+    source: str | None = None  # "exif" (embedded in the photo) | "device" (sent by the client) | None
+    distance_m: float | None = None
+    ok: bool | None = None  # None: no location evidence either way
+
+
+def gps_check(
+    cluster: dict,
+    photo_bytes: bytes,
+    lat: float | None = None,
+    lng: float | None = None,
+    accuracy: float | None = None,
+    photo_gps: tuple[float, float] | None = None,
+) -> GpsCheck:
+    """Is the photo's capture location within VERIFY_GPS_RADIUS_M of the issue?
+
+    EXIF GPS (recorded with the photo) wins: embedded in the upload, or read from
+    the original file by the client before it re-encoded the photo (``photo_gps``).
+    The client-reported device position is a fallback for photos without GPS
+    metadata; its accuracy radius (capped at the limit) is allowed as slack.
+    """
+    gps = extract_exif_gps(photo_bytes) or photo_gps
+    source, slack = "exif", 0.0
+    if gps is None:
+        if lat is None or lng is None:
+            return GpsCheck()
+        gps, source = (lat, lng), "device"
+        slack = min(max(accuracy or 0.0, 0.0), float(VERIFY_GPS_RADIUS_M))
+    d = haversine_m(cluster["lat"], cluster["lng"], gps[0], gps[1])
+    return GpsCheck(source, round(d, 1), d - slack <= VERIFY_GPS_RADIUS_M)
+
+
+def _gps_cue(check: GpsCheck) -> str:
+    where = "embedded GPS" if check.source == "exif" else "device location"
+    return f"photo {where} {check.distance_m:.0f} m from the reported spot"
+
+
+def gps_mismatch_result(check: GpsCheck) -> VerificationResult:
+    """A photo taken too far away cannot show this issue, whatever it depicts."""
+    where = "embedded GPS" if check.source == "exif" else "device location"
+    return VerificationResult(
+        same_location=False,
+        same_location_confidence=0.0,
+        issue_resolved=False,
+        resolution_confidence=0.0,
+        fix_quality="unknown",
+        verdict=Verdict.UNVERIFIED_DIFFERENT_LOCATION,
+        explanation=(
+            f"The photo's {where} is {check.distance_m:.0f} m from the reported spot (limit {VERIFY_GPS_RADIUS_M} m), "
+            "so it cannot show this issue. Retake the photo at the spot."
+        ),
+        matched_cues=[],
+        mismatch_cues=[_gps_cue(check)],
+    )
+
+
+def with_gps_cue(result: VerificationResult, check: GpsCheck) -> VerificationResult:
+    if check.ok:
+        return result.model_copy(update={"matched_cues": [_gps_cue(check), *result.matched_cues]})
+    return result
+
+
+def location_match(result: VerificationResult, check: GpsCheck) -> bool:
+    """PRD ``location_match``: landmarks/road geometry (vision) and GPS agree it is the same spot."""
+    if check.ok is False:
+        return False
+    if result.same_location:
+        return True
+    # Vision could not judge (e.g. offline mode) but the photo's GPS puts it on the spot.
+    return bool(check.ok) and Verdict(result.verdict) == Verdict.INCONCLUSIVE
 
 
 def _event(store: Store, cluster_id: str, type_: str, actor: str, note: str, payload: dict | None = None, ts: str | None = None) -> None:
@@ -35,6 +112,8 @@ def set_status(store: Store, cluster: dict, status: ClusterStatus, note: str | N
     ts = ts or now_iso()
     store.update_cluster(cluster["id"], status=status.value, updated_at=ts)
     cluster.update(status=status.value, updated_at=ts)
+    # Any closure claim is withdrawn, so outstanding proof requests are moot.
+    store.expire_notifications(cluster["id"])
     _event(store, cluster["id"], "status_changed", actor, note or f"Status set to {status.value}", {"from": current.value, "to": status.value}, ts)
     return rescore(store, cluster)
 
@@ -64,7 +143,20 @@ def _context_text(cluster: dict) -> str:
     )
 
 
-def _store_verification(store: Store, cluster: dict, kind: str, actor: str, photo_path: str | None, before_paths: list[str], result: VerificationResult, ai_mode: str, note: str | None, ts: str) -> dict:
+def _store_verification(
+    store: Store,
+    cluster: dict,
+    kind: str,
+    actor: str,
+    photo_path: str | None,
+    before_paths: list[str],
+    result: VerificationResult,
+    ai_mode: str,
+    note: str | None,
+    ts: str,
+    check: GpsCheck | None = None,
+) -> dict:
+    check = check or GpsCheck()
     v = dict(
         id=new_id("V"),
         cluster_id=cluster["id"],
@@ -83,6 +175,9 @@ def _store_verification(store: Store, cluster: dict, kind: str, actor: str, phot
         raw_json=result.model_dump(mode="json"),
         ai_mode=ai_mode,
         note=note,
+        location_match=int(location_match(result, check)),
+        gps_distance_m=check.distance_m,
+        gps_source=check.source,
     )
     store.insert_verification(v)
     return v
@@ -100,6 +195,14 @@ def no_proof_result() -> VerificationResult:
     )
 
 
+def _store_proof_photo(uploads_dir: Path, name: str, data: bytes, result: VerificationResult) -> str:
+    """Write a proof photo, blurring faces / number plates the verifier spotted (PRD privacy NFR)."""
+    if result.after_sensitive_regions:
+        data, _ = blur_regions(data, result.after_sensitive_regions)
+    (uploads_dir / name).write_bytes(data)
+    return name
+
+
 def resolve(
     store: Store,
     ai: ResilientAI,
@@ -111,22 +214,31 @@ def resolve(
     actor: str,
     ts: str | None = None,
     result_override: VerificationResult | None = None,
+    capture_lat: float | None = None,
+    capture_lng: float | None = None,
+    capture_accuracy: float | None = None,
+    photo_gps: tuple[float, float] | None = None,
+    notifier: Notifier | None = None,
 ) -> tuple[dict, dict]:
-    """Official marks the issue resolved. Runs the AI closure check if a photo is given."""
+    """Official marks the issue resolved. Runs the closure check if a photo is given,
+    then asks the issue's reporters (and citizens nearby) for a fresh photo."""
     current = ClusterStatus(cluster["status"])
     if current not in RESOLVABLE:
         raise InvalidTransition(f"Cannot resolve a cluster in status {current.value}")
     ts = ts or now_iso()
     after_path = None
+    check = GpsCheck()
     before_media, before_paths = _before_photos(store, cluster, uploads_dir)
 
     if after_photo is None:
         result, ai_mode = no_proof_result(), "rule"
     else:
+        check = gps_check(cluster, after_photo.data, capture_lat, capture_lng, capture_accuracy, photo_gps)
         data, mime = normalise_photo(after_photo.data)
-        after_path = f"{cluster['id']}-after-{ts[:19].replace(':', '').replace('-', '')}.jpg"
-        (uploads_dir / after_path).write_bytes(data)
-        if result_override is not None:
+        if check.ok is False:
+            # Taken too far away to show this spot: no need to ask the model.
+            result, ai_mode = gps_mismatch_result(check), "rule"
+        elif result_override is not None:
             result, ai_mode = result_override, "seed"
         elif not before_media:
             result, ai_mode = VerificationResult(
@@ -136,6 +248,8 @@ def resolve(
             ), "rule"
         else:
             result, ai_mode = ai.verify(before_media, Media(data, mime, "after"), _context_text(cluster))
+        result = with_gps_cue(result, check)
+        after_path = _store_proof_photo(uploads_dir, f"{cluster['id']}-after-{ts[:19].replace(':', '').replace('-', '')}.jpg", data, result)
 
     verdict = Verdict(result.verdict)
     if verdict in (Verdict.UNVERIFIED_DIFFERENT_LOCATION, Verdict.UNVERIFIED_NOT_FIXED, Verdict.UNVERIFIED_COSMETIC):
@@ -155,15 +269,24 @@ def resolve(
     )
     store.update_cluster(cluster["id"], **updates)
     cluster.update(updates)
-    verification = _store_verification(store, cluster, "official_closure", actor, after_path, before_paths, result, ai_mode, note, ts)
+    verification = _store_verification(store, cluster, "official_closure", actor, after_path, before_paths, result, ai_mode, note, ts, check)
     _event(store, cluster["id"], "resolved", actor, note or "Marked resolved by official", {"after_photo": after_path}, ts)
     _event(
         store, cluster["id"], "closure_check", "ai" if ai_mode.startswith("gemini") else ai_mode,
         f"Closure check: {verdict.value}. {result.explanation}",
-        {"verdict": verdict.value, "fix_quality": result.fix_quality, "ai_mode": ai_mode}, ts,
+        {"verdict": verdict.value, "fix_quality": result.fix_quality, "ai_mode": ai_mode, "gps_distance_m": check.distance_m, "gps_source": check.source},
+        ts,
     )
+    # Replace any earlier round of requests with a fresh one for this closure.
+    store.expire_notifications(cluster["id"])
+    request_verification(store, cluster, verdict=verdict.value, ts=ts, notifier=notifier)
     cluster = rescore(store, cluster)
     return cluster, verification
+
+
+# PRD 4.4: a proof photo that does not match the spot, or shows the fix is
+# temporary / missing, turns the official closure into an Unverified closure.
+CITIZEN_DISPUTE_VERDICTS = {Verdict.UNVERIFIED_DIFFERENT_LOCATION, Verdict.UNVERIFIED_NOT_FIXED, Verdict.UNVERIFIED_COSMETIC}
 
 
 def citizen_verify(
@@ -177,17 +300,22 @@ def citizen_verify(
     note: str | None,
     ts: str | None = None,
     result_override: VerificationResult | None = None,
+    capture_lat: float | None = None,
+    capture_lng: float | None = None,
+    capture_accuracy: float | None = None,
+    photo_gps: tuple[float, float] | None = None,
 ) -> tuple[dict, dict]:
     """A citizen submits a fresh photo after an official closure."""
     current = ClusterStatus(cluster["status"])
     if current not in VERIFIABLE:
         raise InvalidTransition(f"Citizen verification only applies to closed-but-unverified issues (status {current.value})")
     ts = ts or now_iso()
+    check = gps_check(cluster, photo.data, capture_lat, capture_lng, capture_accuracy, photo_gps)
     data, mime = normalise_photo(photo.data)
-    path = f"{cluster['id']}-verify-{ts[:19].replace(':', '').replace('-', '')}.jpg"
-    (uploads_dir / path).write_bytes(data)
     before_media, before_paths = _before_photos(store, cluster, uploads_dir)
-    if result_override is not None:
+    if check.ok is False:
+        result, ai_mode = gps_mismatch_result(check), "rule"
+    elif result_override is not None:
         result, ai_mode = result_override, "seed"
     elif before_media:
         result, ai_mode = ai.verify(before_media, Media(data, mime, "citizen"), _context_text(cluster))
@@ -196,12 +324,14 @@ def citizen_verify(
             same_location=True, same_location_confidence=0.0, issue_resolved=False, resolution_confidence=0.0,
             fix_quality="unknown", verdict=Verdict.INCONCLUSIVE, explanation="No before-photo to compare with.",
         ), "rule"
+    result = with_gps_cue(result, check)
+    path = _store_proof_photo(uploads_dir, f"{cluster['id']}-verify-{ts[:19].replace(':', '').replace('-', '')}.jpg", data, result)
 
     verdict = Verdict(result.verdict)
     new_status = current
     if verdict == Verdict.VERIFIED:
         new_status = ClusterStatus.RESOLVED_VERIFIED
-    elif verdict in (Verdict.UNVERIFIED_NOT_FIXED, Verdict.UNVERIFIED_COSMETIC):
+    elif verdict in CITIZEN_DISPUTE_VERDICTS:
         new_status = ClusterStatus.CLOSURE_DISPUTED
 
     updates = dict(status=new_status.value, updated_at=ts, verification_verdict=verdict.value)
@@ -209,11 +339,16 @@ def citizen_verify(
         updates["verified_at"] = ts
     store.update_cluster(cluster["id"], **updates)
     cluster.update(updates)
-    verification = _store_verification(store, cluster, "citizen", reporter_id or "citizen", path, before_paths, result, ai_mode, note, ts)
+    verification = _store_verification(store, cluster, "citizen", reporter_id or "citizen", path, before_paths, result, ai_mode, note, ts, check)
+    if reporter_id:
+        store.mark_notifications_read(reporter_id, ts, cluster_id=cluster["id"])
+    if new_status == ClusterStatus.RESOLVED_VERIFIED:
+        store.expire_notifications(cluster["id"])
     _event(
         store, cluster["id"], "citizen_verification", reporter_id or "citizen",
         f"Citizen proof photo: {verdict.value}. {result.explanation}",
-        {"verdict": verdict.value, "ai_mode": ai_mode, "status": new_status.value}, ts,
+        {"verdict": verdict.value, "ai_mode": ai_mode, "status": new_status.value, "gps_distance_m": check.distance_m, "gps_source": check.source},
+        ts,
     )
     cluster = rescore(store, cluster)
     return cluster, verification

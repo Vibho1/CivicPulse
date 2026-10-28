@@ -1,7 +1,7 @@
 {
-  "_note": "Approximate ward centroids for the demo. Nearest-centroid assignment is a stand-in for proper ward polygons (swap in GBA/BBMP GIS boundaries for production).",
+  "_note": "Approximate ward centroids for the demo. Nearest-centroid assignment is a stand-in for proper ward polygons (swap in GBA/BBMP GIS boundaries for production). Ward numbers are filled in only where confirmed (PRD OQ-2).",
   "wards": [
-    {"name": "Bellandur", "zone": "Mahadevapura", "lat": 12.9260, "lng": 77.6762},
+    {"name": "Bellandur", "zone": "Mahadevapura", "lat": 12.9260, "lng": 77.6762, "number": 150},
     {"name": "HSR Layout", "zone": "Bommanahalli", "lat": 12.9116, "lng": 77.6389},
     {"name": "Koramangala", "zone": "South", "lat": 12.9352, "lng": 77.6245},
     {"name": "Indiranagar", "zone": "East", "lat": 12.9784, "lng": 77.6408},

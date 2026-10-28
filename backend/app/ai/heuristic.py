@@ -10,16 +10,20 @@ from __future__ import annotations
 import re
 
 from ..domain import CATEGORY_LABELS, Category, Hazard
-from ..schemas import EscalationDraft, EvidenceFlags, Extraction, VerificationResult
+from ..schemas import Dimensions, EscalationDraft, EvidenceFlags, Extraction, VerificationResult
 from . import templates
 from .base import Media, ParseInput
 
 CATEGORY_KEYWORDS: dict[Category, list[str]] = {
     Category.POTHOLE: ["pothole", "pot hole", "potholes", "gundi", "gundigalu", "ಗುಂಡಿ", "crater", "khadda", "gadda", "hole in the road"],
-    Category.ROAD_DAMAGE: ["cave in", "cave-in", "road caved", "road sunk", "road broken", "road cut", "dug up", "trench", "uneven road", "ರಸ್ತೆ ಹಾಳ"],
-    Category.FOOTPATH_DAMAGE: ["footpath", "pavement", "sidewalk", "slab broken", "ಫುಟ್‌ಪಾತ್"],
-    Category.STREETLIGHT: ["streetlight", "street light", "street lamp", "light not working", "lights not working", "no light", "dark street", "beedi deepa", "deepa", "ದೀಪ", "high mast"],
-    Category.GARBAGE: ["garbage", "kasa", "ಕಸ", "trash", "waste", "dump", "dumping", "black spot", "kachra", "litter", "stink", "smell"],
+    Category.UNRESTORED_UTILITY_TRENCH: [
+        "trench", "road cut", "dug up", "not restored", "unrestored", "left open after", "pipeline work", "cable work",
+        "agedu", "agedidare", "ಅಗೆದು", "ತೋಡಿ",
+    ],
+    Category.ROAD_DAMAGE: ["cave in", "cave-in", "road caved", "road sunk", "road broken", "uneven road", "ರಸ್ತೆ ಹಾಳ"],
+    Category.DAMAGED_FOOTPATH: ["footpath", "pavement", "sidewalk", "slab broken", "ಫುಟ್‌ಪಾತ್"],
+    Category.STREETLIGHT_OUTAGE: ["streetlight", "street light", "street lamp", "light not working", "lights not working", "no light", "dark street", "beedi deepa", "deepa", "ದೀಪ", "high mast"],
+    Category.GARBAGE_DUMP: ["garbage", "kasa", "ಕಸ", "trash", "waste", "dump", "dumping", "black spot", "kachra", "litter", "stink", "smell"],
     Category.WATER_LEAK: ["water leak", "leaking", "leakage", "pipe burst", "pipeline burst", "neeru", "ನೀರು", "water flowing", "cauvery water", "paani"],
     Category.SEWAGE_OVERFLOW: ["sewage", "sewer", "ugd", "overflowing", "gutter", "nala", "ಒಳಚರಂಡಿ", "drainage overflow"],
     Category.OPEN_DRAIN_MANHOLE: ["manhole", "open drain", "drain cover", "missing cover", "charandi", "ಚರಂಡಿ", "open chamber"],
@@ -28,6 +32,21 @@ CATEGORY_KEYWORDS: dict[Category, list[str]] = {
     Category.POWER_HAZARD: ["live wire", "wire hanging", "dangling wire", "electric shock", "transformer", "sparking", "sparks", "electric pole", "ವಿದ್ಯುತ್"],
     Category.TRAFFIC_SIGNAL: ["signal not working", "traffic signal", "traffic light", "zebra crossing", "signboard", "sign board"],
 }
+
+# Someone hurt or in immediate danger: the citizen must call 112 (PRD non-goal: no dispatch).
+# Whole words; a trailing "*" marks a stem ("electrocut*" = electrocuted / electrocution).
+EMERGENCY_KEYWORDS = [
+    "fire", "on fire", "burning", "electrocut*", "got electric shock", "got a shock", "unconscious", "bleeding",
+    "injured", "trapped", "gas leak", "collapsed", "dead body", "died", "ambulance", "met with an accident",
+    "had an accident", "accident just happened", "ಬೆಂಕಿ", "ಅಪಘಾತ", "ಗಾಯ",
+]
+
+DIMENSION_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(cm|centimet(?:er|re)s?|mm|m|met(?:er|re)s?|ft|feet|foot|inch(?:es)?)\s*"
+    r"(deep|depth|wide|width|across|long|length)",
+    re.IGNORECASE,
+)
+UNIT_CM = {"cm": 1.0, "mm": 0.1, "m": 100.0, "ft": 30.48, "feet": 30.48, "foot": 30.48, "inch": 2.54}
 
 SEVERITY_PLUS_ONE = ["big", "huge", "large", "deep", "dodda", "ದೊಡ್ಡ", "dangerous", "danger", "urgent", "very", "tumba", "bahala", "bahut", "accident", "fell", "skid", "injur", "overflow", "blocked", "whole road", "entire"]
 SEVERITY_PLUS_TWO = ["died", "death", "live wire", "shock", "fire", "child", "children", "ambulance", "school bus"]
@@ -94,13 +113,43 @@ def hazards_for(text: str, category: Category) -> list[Hazard]:
     found = [h for h, words in HAZARD_KEYWORDS.items() if _count_hits(t, words)]
     if category == Category.POTHOLE and Hazard.WATERLOGGING in found and Hazard.TWO_WHEELER_SKID_RISK not in found:
         found.append(Hazard.TWO_WHEELER_SKID_RISK)
-    if category == Category.STREETLIGHT and Hazard.NIGHT_VISIBILITY not in found:
+    if category == Category.STREETLIGHT_OUTAGE and Hazard.NIGHT_VISIBILITY not in found:
         found.append(Hazard.NIGHT_VISIBILITY)
-    if category in (Category.SEWAGE_OVERFLOW, Category.GARBAGE) and Hazard.HEALTH_HAZARD not in found:
+    if category in (Category.SEWAGE_OVERFLOW, Category.GARBAGE_DUMP) and Hazard.HEALTH_HAZARD not in found:
         found.append(Hazard.HEALTH_HAZARD)
     if category == Category.POWER_HAZARD and Hazard.LIVE_WIRE not in found:
         found.append(Hazard.LIVE_WIRE)
+    if category == Category.UNRESTORED_UTILITY_TRENCH and Hazard.RECENT_DIGGING not in found:
+        found.append(Hazard.RECENT_DIGGING)
     return found
+
+
+def _keyword_pattern(word: str) -> str:
+    if not word.isascii():
+        return re.escape(word)  # Kannada: \b is unreliable around combining marks
+    if word.endswith("*"):
+        return rf"\b{re.escape(word[:-1])}"
+    return rf"\b{re.escape(word)}\b"
+
+
+_EMERGENCY_RE = re.compile("|".join(_keyword_pattern(w) for w in EMERGENCY_KEYWORDS), re.IGNORECASE)
+
+
+def is_emergency(text: str) -> bool:
+    """Someone is hurt or in immediate danger (word-boundary match, so 'firewood' is not a fire)."""
+    return bool(_EMERGENCY_RE.search(text or ""))
+
+
+def dimensions_for(text: str) -> Dimensions | None:
+    """'about 30 cm deep and 1 m wide' -> Dimensions(depth=30, width=100)."""
+    dims: dict[str, float] = {}
+    for value, unit, what in DIMENSION_RE.findall(text or ""):
+        u = unit.lower()
+        key = "cm" if u.startswith("centimet") else "m" if u.startswith("met") else "inch" if u.startswith("inch") else u
+        cm = round(float(value) * UNIT_CM.get(key, 1.0), 1)
+        field = {"deep": "depth", "depth": "depth", "wide": "width", "width": "width", "across": "width"}.get(what.lower(), "length")
+        dims.setdefault(field, cm)
+    return Dimensions(**dims) if dims else None
 
 
 def utility_type_for(text: str) -> str:
@@ -135,10 +184,9 @@ class HeuristicAI:
         text = (inp.text or "").strip()
         if not text and inp.audio is not None:
             text = ""
+        # Without words the offline parser cannot tell what a photo shows: "other" with low
+        # confidence, which intake turns into a prompt to describe the issue.
         category, conf = classify(text) if text else (Category.OTHER, 0.15)
-        if category == Category.OTHER and inp.photo is not None and not text:
-            # Photo-only report without Gemini: assume the most common issue type.
-            category, conf = Category.POTHOLE, 0.2
         severity = severity_for(text, category) if text else 2
         hazards = hazards_for(text, category) if text else []
         if inp.context_hint:
@@ -152,6 +200,9 @@ class HeuristicAI:
         landmark = landmark_for(text) if text else None
         utility = utility_type_for(text)
         recent_digging = Hazard.RECENT_DIGGING in hazards or utility != "none"
+        emergency = is_emergency(text)
+        if emergency:
+            severity = 5
         label = CATEGORY_LABELS[category]
         title = f"{label} near {landmark}" if landmark else f"{label} in {inp.ward}"
         description = text if text else f"{label} reported via photo/voice at {inp.lat:.5f}, {inp.lng:.5f} (no transcript available offline)."
@@ -167,6 +218,7 @@ class HeuristicAI:
             description=description[:600],
             landmark=landmark,
             size_estimate=None,
+            estimated_dimensions_cm=dimensions_for(text),
             hazards=hazards,
             evidence=EvidenceFlags(
                 recent_digging=recent_digging,
@@ -179,6 +231,7 @@ class HeuristicAI:
             suggested_agency=None,
             agency_reasoning="Rule-based routing (offline mode).",
             confidence=conf,
+            is_emergency=emergency,
         )
 
     def verify_fix(self, before: list[Media], after: Media, context: str) -> VerificationResult:

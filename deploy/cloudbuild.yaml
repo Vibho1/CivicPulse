@@ -1,0 +1,13 @@
+# Build the CivicPulse image (PWA + API) and push it to Artifact Registry. The exact command for your
+# project is printed by `terraform output -raw release_commands` (deploy/terraform), e.g.:
+#   gcloud builds submit . --config deploy/cloudbuild.yaml \
+#     --substitutions _IMAGE=REGION-docker.pkg.dev/PROJECT/REPO/civicpulse:TAG ...
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "--tag", "${_IMAGE}", "."]
+images:
+  - "${_IMAGE}"
+options:
+  # Required when the build runs as a user-specified service account.
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1200s

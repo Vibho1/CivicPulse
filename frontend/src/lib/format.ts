@@ -1,4 +1,4 @@
-import type { Cluster } from '../api';
+import type { Cluster, EstimatedDimensionsCm } from '../api';
 
 const HOUR = 3_600_000;
 
@@ -25,15 +25,18 @@ export function timeAgo(iso: string | null | undefined, now: Date = new Date()):
   return future ? `in ${s}` : `${s} ago`;
 }
 
+/** India Standard Time is UTC+05:30 all year (no daylight saving). */
+const IST_OFFSET_MS = 330 * 60_000;
+
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+
+/** ISO-style date in India Standard Time: "2026-10-28 14:30" (24 h), or "2026-10-28" with `{ time: false }`. */
 export function fmtDate(iso: string | null | undefined, opts: { time?: boolean } = { time: true }): string {
   const d = parseIso(iso);
   if (!d) return '—';
-  return d.toLocaleString('en-IN', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    ...(opts.time ? { hour: '2-digit', minute: '2-digit', hour12: false } : {}),
-  });
+  const ist = new Date(d.getTime() + IST_OFFSET_MS); // read back with the UTC getters
+  const date = `${ist.getUTCFullYear()}-${pad2(ist.getUTCMonth() + 1)}-${pad2(ist.getUTCDate())}`;
+  return opts.time ? `${date} ${pad2(ist.getUTCHours())}:${pad2(ist.getUTCMinutes())}` : date;
 }
 
 /** Hours → "5.5 h" or "3.1 d". */
@@ -118,4 +121,36 @@ export function plural(n: number, one: string, many = `${one}s`): string {
 
 export function coordText(lat: number, lng: number): string {
   return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+}
+
+/** 0..1 confidence → "93%". */
+export function fmtConfidence(v: number): string {
+  return `${Math.round(clamp(v, 0, 1) * 100)}%`;
+}
+
+/** Metres → "12 m" or "1.4 km". */
+export function fmtDistance(m: number): string {
+  const abs = Math.abs(m);
+  if (abs < 1000) return `${Math.round(abs)} m`;
+  return `${(abs / 1000).toFixed(abs < 10_000 ? 1 : 0)} km`;
+}
+
+/** `{length: 120, width: 80, depth: 15}` → "≈ 120 × 80 cm, 15 cm deep"; null when nothing was estimated. */
+export function fmtDimensionsCm(d: EstimatedDimensionsCm | null | undefined): string | null {
+  if (!d) return null;
+  const cm = (v: number | null | undefined): number | null => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : null);
+  const length = cm(d.length);
+  const width = cm(d.width);
+  const depth = cm(d.depth);
+  const parts: string[] = [];
+  if (length !== null && width !== null) parts.push(`${length} × ${width} cm`);
+  else if (length !== null) parts.push(`${length} cm long`);
+  else if (width !== null) parts.push(`${width} cm wide`);
+  if (depth !== null) parts.push(`${depth} cm deep`);
+  return parts.length ? `≈ ${parts.join(', ')}` : null;
+}
+
+/** "Ward 150 · Bellandur" when the official ward number is known, else just the name. */
+export function wardName(name: string, wardNo?: number | null): string {
+  return typeof wardNo === 'number' ? `Ward ${wardNo} · ${name}` : name;
 }

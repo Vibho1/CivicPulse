@@ -1,6 +1,7 @@
 import type { TimelineEvent } from '../api';
-import { fmtDate, shortId, timeAgo } from '../lib/format';
-import { EVENT_LABELS } from '../lib/status';
+import { useI18n } from '../i18n';
+import { fmtDate, shortId } from '../lib/format';
+import { EVENT_LABELS, statusLabel } from '../lib/status';
 import { Icon, type IconName } from './Icon';
 
 const ICONS: Record<string, { icon: IconName; tone: string }> = {
@@ -14,6 +15,8 @@ const ICONS: Record<string, { icon: IconName; tone: string }> = {
   citizen_verification: { icon: 'camera', tone: 'good' },
   repeat_failure_flagged: { icon: 'flag', tone: 'bad' },
   escalation_drafted: { icon: 'send', tone: 'neutral' },
+  verification_requested: { icon: 'bell', tone: 'info' },
+  external_ref_recorded: { icon: 'file-text', tone: 'neutral' },
 };
 
 function toneFor(e: TimelineEvent): string {
@@ -29,7 +32,8 @@ function toneFor(e: TimelineEvent): string {
 }
 
 export function Timeline({ events }: { events: TimelineEvent[] }) {
-  if (!events.length) return <p className="muted">No events yet.</p>;
+  const { t, fmt, label } = useI18n();
+  if (!events.length) return <p className="muted">{t('timeline.empty')}</p>;
   const sorted = [...events].sort((a, b) => a.created_at.localeCompare(b.created_at));
   return (
     <ol className="timeline">
@@ -43,17 +47,20 @@ export function Timeline({ events }: { events: TimelineEvent[] }) {
             </span>
             <div className="tl-body">
               <div className="tl-head">
-                <strong>{EVENT_LABELS[e.type] ?? e.type.replace(/_/g, ' ')}</strong>
+                <strong>{label('event', e.type, EVENT_LABELS[e.type] ?? e.type.replace(/_/g, ' '))}</strong>
                 <time dateTime={e.created_at} title={fmtDate(e.created_at)}>
-                  {timeAgo(e.created_at)}
+                  {fmt.timeAgo(e.created_at)}
                 </time>
               </div>
               <p>{e.note}</p>
               <div className="tl-meta">
-                by {shortId(e.actor, 24)}
-                {typeof e.payload?.distance_m === 'number' ? ` · ${e.payload.distance_m} m away` : ''}
+                {t('timeline.by', { actor: shortId(e.actor, 24) })}
+                {typeof e.payload?.distance_m === 'number' ? ` · ${t('timeline.away', { distance: fmt.distance(Number(e.payload.distance_m)) })}` : ''}
                 {typeof e.payload?.from === 'string' && typeof e.payload?.to === 'string'
-                  ? ` · ${String(e.payload.from).replace(/_/g, ' ')} → ${String(e.payload.to).replace(/_/g, ' ')}`
+                  ? ` · ${t('timeline.transition', {
+                      from: label('status', String(e.payload.from), statusLabel(String(e.payload.from))),
+                      to: label('status', String(e.payload.to), statusLabel(String(e.payload.to))),
+                    })}`
                   : ''}
               </div>
             </div>

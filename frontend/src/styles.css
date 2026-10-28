@@ -471,6 +471,74 @@ dl {
   color: var(--bad);
 }
 
+/* Notification inbox (header bell) */
+.inbox-summary {
+  position: relative;
+}
+.inbox-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--bad);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 18px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--header-bg);
+  pointer-events: none;
+}
+.inbox-list {
+  width: min(340px, calc(100vw - 20px));
+  max-height: min(70vh, 460px);
+  overflow-y: auto;
+}
+.inbox-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 6px 8px 12px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.88rem;
+}
+.menu-list .inbox-mark {
+  width: auto;
+  display: inline-flex;
+  padding: 4px 8px;
+  color: var(--primary);
+  font-size: 0.78rem;
+}
+.menu-list .inbox-item {
+  align-items: start;
+  row-gap: 2px;
+}
+.inbox-item .icon {
+  margin-top: 2px;
+  color: var(--info);
+}
+.inbox-item strong {
+  font-size: 0.88rem;
+  line-height: 1.3;
+}
+.inbox-msg {
+  grid-column: 2;
+  font-weight: 400;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+.inbox-empty {
+  margin: 0;
+  padding: 14px 12px;
+  text-align: center;
+}
+
 .main {
   flex: 1;
   width: 100%;
@@ -572,6 +640,14 @@ dl {
 .btn-ghost.danger {
   color: var(--bad);
 }
+.btn-danger {
+  background: var(--bad);
+  color: #fff;
+  box-shadow: 0 6px 16px -8px rgba(220, 38, 38, 0.7);
+}
+.btn-danger:hover:not(:disabled) {
+  background: #b91c1c;
+}
 .btn-sm {
   min-height: 36px;
   padding: 0 12px;
@@ -659,6 +735,11 @@ dl {
   background: var(--teal-50);
   color: #0f766e;
   border-color: var(--teal-100);
+}
+.chip-code {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
 }
 .chip-lang {
   background: #fdf4ff;
@@ -1003,6 +1084,17 @@ td.tone-bad {
   text-decoration: underline;
   color: inherit;
 }
+.banner.emergency {
+  align-items: center;
+  flex-wrap: wrap;
+  border-width: 2px;
+}
+.banner.emergency .btn {
+  margin-left: auto;
+}
+.banner a.btn-danger {
+  color: #fff;
+}
 
 /* ==========================================================================
    Score ring / bars / meters / SLA
@@ -1127,7 +1219,7 @@ td.tone-bad {
   gap: 10px;
 }
 .stats-wide {
-  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-columns: repeat(9, minmax(0, 1fr));
 }
 .stat {
   background: var(--surface);
@@ -1178,6 +1270,18 @@ td.tone-bad {
 }
 .status-filter {
   margin: 0;
+}
+.filter-sep {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 1px;
+  margin: 4px 2px;
+  background: var(--border);
+}
+.chip-sla.active {
+  background: var(--bad-bg);
+  color: #991b1b;
+  border-color: var(--bad-border);
 }
 .filter-selects {
   display: flex;
@@ -1577,6 +1681,19 @@ td.tone-bad {
   font-size: 0.85rem;
   min-width: 0;
 }
+.emergency-note {
+  margin: 4px 0 0;
+  color: var(--text-2);
+}
+.emergency-note .icon {
+  vertical-align: -2px;
+  margin-right: 2px;
+  color: var(--bad);
+}
+.emergency-note a {
+  color: var(--bad);
+  font-weight: 700;
+}
 
 /* result card */
 .result {
@@ -1670,6 +1787,31 @@ td.tone-bad {
   margin: 4px 0 8px;
   color: var(--text-2);
   font-size: 0.95rem;
+}
+.routing-secondary {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(13, 148, 136, 0.35);
+}
+.routing-secondary-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #0f766e;
+}
+.routing-secondary-agency {
+  font-weight: 800;
+  color: #134e4a;
+  margin-top: 2px;
+}
+.routing-secondary .kv {
+  margin-top: 6px;
+}
+.routing-agency .chip,
+.routing-secondary-agency .chip {
+  vertical-align: middle;
+  margin-left: 4px;
 }
 .ai-note {
   display: flex;
@@ -1799,6 +1941,27 @@ td.tone-bad {
   color: #0f766e;
   margin-bottom: 8px;
 }
+/* official grievance-portal ticket (Sahaaya) */
+.ext-ref {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border-strong);
+  display: grid;
+  gap: 6px;
+}
+.ext-ref .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ext-ref-set {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+}
+.ext-ref-set > .icon {
+  color: var(--muted);
+}
 
 .panel {
   background: var(--surface);
@@ -1864,6 +2027,67 @@ td.tone-bad {
   font-size: 0.82rem;
   line-height: 1.5;
   background: var(--surface-2);
+}
+.draft .draft-meta {
+  margin-top: 0;
+}
+
+/* modal dialog (ward escalation package) */
+.modal {
+  width: min(760px, calc(100vw - 24px));
+  max-width: none;
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.modal::backdrop {
+  background: rgba(15, 23, 42, 0.55);
+}
+.modal > .panel {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.pkg-summary {
+  font-size: 0.95rem;
+}
+.pkg-clusters {
+  display: grid;
+  gap: 8px;
+}
+.pkg-cluster {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  background: var(--surface-2);
+}
+.pkg-cluster-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pkg-cluster-id {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.pkg-cluster-title {
+  font-weight: 650;
+  font-size: 0.9rem;
+  margin-top: 4px;
+}
+.pkg-cluster .chips {
+  margin-top: 6px;
+}
+.pkg-cluster p {
+  margin: 6px 0 0;
 }
 
 /* verification card */
@@ -2413,7 +2637,7 @@ th.left .th-btn {
 }
 .ward-card-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 6px;
 }
 .ward-card-grid > div {
@@ -2440,6 +2664,10 @@ th.left .th-btn {
 .ward-card .chips {
   margin-top: 0;
 }
+.ward-card-actions {
+  display: flex;
+  justify-content: flex-end;
+}
 .bar-fill-bad {
   background: linear-gradient(90deg, #f59e0b, var(--bad));
 }
@@ -2455,7 +2683,7 @@ th.left .th-btn {
     grid-template-columns: 340px minmax(0, 1fr);
   }
   .stats-wide {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -2508,6 +2736,16 @@ th.left .th-btn {
   }
   .brand-text strong {
     font-size: 1rem;
+  }
+  /* Room for the inbox bell: the brand name truncates rather than overflowing. */
+  .brand,
+  .brand-text {
+    min-width: 0;
+  }
+  .brand-text strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .header-tools {
     gap: 6px;
@@ -2706,7 +2944,11 @@ th.left .th-btn {
     flex: 1 1 100%;
   }
   .ward-card-grid {
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(3, 1fr);
+  }
+  /* Small phones: the logo alone carries the brand so the header tools (incl. the bell) fit. */
+  .brand-text {
+    display: none;
   }
 }
 

@@ -13,6 +13,8 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from .domain import LEGACY_CATEGORY_IDS
+
 JSON_FIELDS = {
     "hazards_json",
     "evidence_json",
@@ -24,6 +26,8 @@ JSON_FIELDS = {
     "context_json",
     "exif_gps_json",
     "before_photo_paths_json",
+    "photo_flags_json",
+    "dimensions_json",
 }
 
 SCHEMA = """
@@ -60,7 +64,14 @@ CREATE TABLE IF NOT EXISTS clusters (
     hazards_json TEXT,
     context_json TEXT,
     closure_count INTEGER NOT NULL DEFAULT 0,
-    first_report_id TEXT
+    first_report_id TEXT,
+    reporter_count INTEGER NOT NULL DEFAULT 1,
+    secondary_agency TEXT,
+    secondary_agency_reason TEXT,
+    routing_confidence REAL,
+    external_system TEXT,
+    external_ref TEXT,
+    external_ref_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_clusters_latlng ON clusters(lat, lng);
 CREATE INDEX IF NOT EXISTS idx_clusters_status ON clusters(status);
@@ -96,9 +107,26 @@ CREATE TABLE IF NOT EXISTS reports (
     ward TEXT,
     exif_gps_json TEXT,
     is_corroboration INTEGER NOT NULL DEFAULT 0,
+    secondary_agency TEXT,
+    secondary_agency_reason TEXT,
+    routing_confidence REAL,
+    photo_flags_json TEXT,
+    privacy_blurred INTEGER NOT NULL DEFAULT 0,
+    dimensions_json TEXT,
     FOREIGN KEY(cluster_id) REFERENCES clusters(id)
 );
 CREATE INDEX IF NOT EXISTS idx_reports_cluster ON reports(cluster_id);
+CREATE INDEX IF NOT EXISTS idx_reports_reporter ON reports(reporter_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_reports_latlng ON reports(lat, lng);
+
+-- Submissions bounced as non-civic / unreadable (feeds reporter credibility; no content kept).
+CREATE TABLE IF NOT EXISTS rejections (
+    id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    reporter_id TEXT NOT NULL,
+    code TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rejections_reporter ON rejections(reporter_id);
 
 CREATE TABLE IF NOT EXISTS verifications (
     id TEXT PRIMARY KEY,
@@ -118,6 +146,9 @@ CREATE TABLE IF NOT EXISTS verifications (
     raw_json TEXT,
     ai_mode TEXT,
     note TEXT,
+    location_match INTEGER,
+    gps_distance_m REAL,
+    gps_source TEXT,
     FOREIGN KEY(cluster_id) REFERENCES clusters(id)
 );
 CREATE INDEX IF NOT EXISTS idx_verifications_cluster ON verifications(cluster_id);
@@ -133,6 +164,56 @@ CREATE TABLE IF NOT EXISTS events (
     FOREIGN KEY(cluster_id) REFERENCES clusters(id)
 );
 CREATE INDEX IF NOT EXISTS idx_events_cluster ON events(cluster_id);
+
+-- Outbox / in-app inbox for "send a proof photo" requests (status: unread | read | expired).
+CREATE TABLE IF NOT EXISTS notifications (
+    id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    cluster_id TEXT NOT NULL,
+    recipient TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    message TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'unread',
+    read_at TEXT,
+    payload_json TEXT,
+    FOREIGN KEY(cluster_id) REFERENCES clusters(id)
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_recipient ON notifications(recipient, status);
+CREATE INDEX IF NOT EXISTS idx_notifications_cluster ON notifications(cluster_id);
+"""
+
+# Columns added after the first release. ``CREATE TABLE IF NOT EXISTS`` leaves
+# existing tables alone, so older database files get them via ALTER TABLE.
+MIGRATIONS: dict[str, list[tuple[str, str]]] = {
+    "clusters": [
+        ("reporter_count", "INTEGER NOT NULL DEFAULT 1"),
+        ("secondary_agency", "TEXT"),
+        ("secondary_agency_reason", "TEXT"),
+        ("routing_confidence", "REAL"),
+        ("external_system", "TEXT"),
+        ("external_ref", "TEXT"),
+        ("external_ref_at", "TEXT"),
+    ],
+    "reports": [
+        ("secondary_agency", "TEXT"),
+        ("secondary_agency_reason", "TEXT"),
+        ("routing_confidence", "REAL"),
+        ("photo_flags_json", "TEXT"),
+        ("privacy_blurred", "INTEGER NOT NULL DEFAULT 0"),
+        ("dimensions_json", "TEXT"),
+    ],
+    "verifications": [
+        ("location_match", "INTEGER"),
+        ("gps_distance_m", "REAL"),
+        ("gps_source", "TEXT"),
+    ],
+}
+
+BACKFILL_REPORTER_COUNT = """
+UPDATE clusters SET reporter_count = (
+    SELECT COUNT(DISTINCT COALESCE(r.reporter_id, r.id)) FROM reports r WHERE r.cluster_id = clusters.id
+) WHERE EXISTS (SELECT 1 FROM reports r WHERE r.cluster_id = clusters.id)
 """
 
 
@@ -173,6 +254,21 @@ class Store:
                 self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.execute("PRAGMA foreign_keys=ON")
             self.conn.executescript(SCHEMA)
+            self._migrate()
+
+    def _migrate(self) -> None:
+        for table, columns in MIGRATIONS.items():
+            have = {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            for name, decl in columns:
+                if name in have:
+                    continue
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+                if (table, name) == ("clusters", "reporter_count"):
+                    self.conn.execute(BACKFILL_REPORTER_COUNT)
+        # Category ids were renamed to the PRD vocabulary.
+        for old, new in LEGACY_CATEGORY_IDS.items():
+            for table in ("clusters", "reports"):
+                self.conn.execute(f"UPDATE {table} SET category = ? WHERE category = ?", [new, old])
 
     # ----------------------------------------------------------- primitives
     def _insert(self, table: str, row: dict[str, Any]) -> None:
@@ -259,6 +355,66 @@ class Store:
     def recent_reports(self, limit: int = 20) -> list[dict[str, Any]]:
         return self._all("SELECT * FROM reports ORDER BY created_at DESC LIMIT ?", [limit])
 
+    def recent_reports_by_reporter(self, reporter_id: str, since: str, until: str) -> list[dict[str, Any]]:
+        """A reporter's reports created in [since, until], newest first."""
+        return self._all(
+            "SELECT * FROM reports WHERE reporter_id = ? AND created_at >= ? AND created_at <= ? ORDER BY created_at DESC",
+            [reporter_id, since, until],
+        )
+
+    def reports_in_bbox(
+        self, min_lat: float, max_lat: float, min_lng: float, max_lng: float, since: str | None = None, until: str | None = None
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM reports WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?"
+        params: list[Any] = [min_lat, max_lat, min_lng, max_lng]
+        if since:
+            sql += " AND created_at >= ?"
+            params.append(since)
+        if until:
+            sql += " AND created_at <= ?"
+            params.append(until)
+        return self._all(sql, params)
+
+    def reporter_keys(self, cluster_id: str) -> set[str]:
+        """Distinct citizens behind a cluster; anonymous reports count individually."""
+        rows = self._all("SELECT DISTINCT COALESCE(reporter_id, id) AS k FROM reports WHERE cluster_id = ?", [cluster_id])
+        return {r["k"] for r in rows}
+
+    def reporter_ids_for_cluster(self, cluster_id: str) -> list[str]:
+        """Reachable (non-anonymous) reporters of a cluster."""
+        rows = self._all(
+            "SELECT DISTINCT reporter_id FROM reports WHERE cluster_id = ? AND reporter_id IS NOT NULL AND reporter_id != ''",
+            [cluster_id],
+        )
+        return [r["reporter_id"] for r in rows]
+
+    # ------------------------------------------------------ reporter history
+    def insert_rejection(self, r: dict[str, Any]) -> None:
+        self._insert("rejections", r)
+
+    def reporter_stats(self, reporter_id: str) -> dict[str, int]:
+        """A reporter's track record: reports, how many were independently confirmed
+        (another citizen reported the same issue, or the fix was verified), how many
+        carried a suspicious photo, and how many submissions were bounced."""
+        row = self._one(
+            """
+            SELECT COUNT(*) AS reports,
+                   COALESCE(SUM(CASE WHEN c.reporter_count >= 2 OR c.status = 'resolved_verified' THEN 1 ELSE 0 END), 0) AS confirmed,
+                   COALESCE(SUM(CASE WHEN r.photo_flags_json LIKE '%exif_location_far%'
+                                       OR r.photo_flags_json LIKE '%stock_or_screenshot%' THEN 1 ELSE 0 END), 0) AS flagged
+            FROM reports r JOIN clusters c ON c.id = r.cluster_id
+            WHERE r.reporter_id = ?
+            """,
+            [reporter_id],
+        ) or {}
+        rejected = self._one("SELECT COUNT(*) AS n FROM rejections WHERE reporter_id = ?", [reporter_id]) or {}
+        return {
+            "reports": int(row.get("reports") or 0),
+            "confirmed": int(row.get("confirmed") or 0),
+            "flagged": int(row.get("flagged") or 0),
+            "rejected": int(rejected.get("n") or 0),
+        }
+
     # --------------------------------------------------------- verifications
     def insert_verification(self, v: dict[str, Any]) -> None:
         self._insert("verifications", v)
@@ -271,7 +427,46 @@ class Store:
         self._insert("events", e)
 
     def events_for_cluster(self, cluster_id: str) -> list[dict[str, Any]]:
-        return self._all("SELECT * FROM events WHERE cluster_id = ? ORDER BY created_at ASC", [cluster_id])
+        return self._all("SELECT * FROM events WHERE cluster_id = ? ORDER BY created_at ASC, rowid ASC", [cluster_id])
+
+    # --------------------------------------------------------- notifications
+    def insert_notification(self, n: dict[str, Any]) -> None:
+        self._insert("notifications", n)
+
+    def notifications_for(self, recipient: str, include_read: bool = False, limit: int = 50) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM notifications WHERE recipient = ?"
+        if not include_read:
+            sql += " AND status = 'unread'"
+        sql += " ORDER BY created_at DESC, rowid DESC LIMIT ?"
+        return self._all(sql, [recipient, limit])
+
+    def notifications_for_cluster(self, cluster_id: str) -> list[dict[str, Any]]:
+        return self._all("SELECT * FROM notifications WHERE cluster_id = ? ORDER BY created_at ASC, rowid ASC", [cluster_id])
+
+    def unread_count(self, recipient: str) -> int:
+        return self._one("SELECT COUNT(*) AS n FROM notifications WHERE recipient = ? AND status = 'unread'", [recipient])["n"]  # type: ignore[index]
+
+    def mark_notifications_read(self, recipient: str, read_at: str, ids: list[str] | None = None, cluster_id: str | None = None) -> int:
+        """Mark a recipient's unread notifications read: all of them, specific ids, or one cluster's."""
+        sql = "UPDATE notifications SET status = 'read', read_at = ? WHERE recipient = ? AND status = 'unread'"
+        params: list[Any] = [read_at, recipient]
+        if ids is not None:
+            if not ids:
+                return 0
+            sql += f" AND id IN ({', '.join('?' for _ in ids)})"
+            params.extend(ids)
+        if cluster_id:
+            sql += " AND cluster_id = ?"
+            params.append(cluster_id)
+        with self._lock, self.conn:
+            return self.conn.execute(sql, params).rowcount
+
+    def expire_notifications(self, cluster_id: str) -> int:
+        """Withdraw outstanding proof requests (issue verified, or the closure was taken back)."""
+        with self._lock, self.conn:
+            return self.conn.execute(
+                "UPDATE notifications SET status = 'expired' WHERE cluster_id = ? AND status = 'unread'", [cluster_id]
+            ).rowcount
 
     # ----------------------------------------------------------------- stats
     def counts(self) -> dict[str, int]:
@@ -282,7 +477,7 @@ class Store:
 
     def reset(self) -> None:
         with self._lock, self.conn:
-            for t in ("events", "verifications", "reports", "clusters"):
+            for t in ("notifications", "events", "verifications", "reports", "clusters", "rejections"):
                 self.conn.execute(f"DELETE FROM {t}")
 
     def close(self) -> None:

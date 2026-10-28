@@ -1,0 +1,132 @@
+/* ==========================================================================
+   i18n: Kannada typography and the EN | ಕನ್ನಡ toggle.
+   Imported by src/i18n/index.tsx, so it ships with the provider. The provider keeps
+   <html lang> in sync; every Kannada rule hangs off :lang(kn) / [lang|='kn'].
+   ========================================================================== */
+
+:root {
+  /* Kannada faces first: Noto Sans Kannada (Android, ChromeOS, Linux), Nirmala UI / Tunga
+     (Windows), Kannada Sangam MN / Kannada MN (macOS, iOS); then the Latin system stack. */
+  --font-kn: 'Noto Sans Kannada', 'Nirmala UI', 'Tunga', 'Kannada Sangam MN', 'Kannada MN', system-ui, -apple-system,
+    'Segoe UI', Roboto, 'Noto Sans', 'Noto Sans Devanagari', sans-serif;
+}
+
+/* Whole UI in Kannada: swap the base stack (body, Leaflet popups and anything else on var(--font)). */
+html:lang(kn) {
+  --font: var(--font-kn);
+}
+
+/* Kannada islands inside an English page, e.g. a Kannada transcript or the ಕನ್ನಡ toggle button. */
+[lang|='kn'] {
+  font-family: var(--font-kn);
+}
+
+/* Vowel signs and stacked conjuncts need more vertical room than Latin text. */
+html:lang(kn) body {
+  line-height: 1.6;
+}
+html:lang(kn) :is(h1, h2, h3, h4) {
+  line-height: 1.4;
+  letter-spacing: normal;
+}
+html:lang(kn) .brand-text {
+  line-height: 1.25;
+}
+
+/* Letter-spacing is tuned for Latin capitals; Kannada has no case and tracking only pulls
+   letter clusters apart. */
+html:lang(kn)
+  :is(
+    .eyebrow,
+    .block-title,
+    .routing-head,
+    .routing-agency,
+    .routing-secondary-title,
+    .official-label,
+    .verdict-kind,
+    .cues-label,
+    .tag,
+    .ward-card-label,
+    .table thead th,
+    .score-ring text
+  ) {
+  letter-spacing: normal;
+}
+
+/* The smallest labels get a little more size so Kannada stays legible. */
+html:lang(kn) :is(.eyebrow, .tag, .ward-card-label, .table thead th, .brand-text small) {
+  font-size: 0.76rem;
+}
+
+/* Kannada labels run longer than English: let buttons wrap instead of overflowing narrow screens. */
+html:lang(kn) .btn {
+  white-space: normal;
+  text-align: center;
+  line-height: 1.3;
+}
+
+@media (max-width: 768px) {
+  html:lang(kn) .tabbar a {
+    font-size: 0.76rem;
+  }
+  html:lang(kn) .legend {
+    font-size: 0.72rem;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Language toggle (LanguageToggle.tsx): segmented EN | ಕನ್ನಡ on .btn .btn-ghost .btn-sm
+   -------------------------------------------------------------------------- */
+.lang-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  flex: 0 0 auto;
+}
+.lang-toggle .lang-toggle-btn {
+  min-height: 32px;
+  padding: 0 10px;
+  border-color: transparent;
+  border-radius: 9px;
+  white-space: nowrap;
+}
+.lang-toggle .lang-toggle-btn.active {
+  background: var(--primary-50);
+  color: var(--primary-700);
+  cursor: default;
+}
+
+/* In the dark app header. */
+.header .lang-toggle {
+  border-color: rgba(255, 255, 255, 0.18);
+}
+.header .lang-toggle .lang-toggle-btn {
+  color: var(--header-muted);
+}
+.header .lang-toggle .lang-toggle-btn:not(.active):hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+.header .lang-toggle .lang-toggle-btn.active {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+@media (max-width: 768px) {
+  /* Phones: a single button naming the other language. */
+  .header .lang-toggle {
+    padding: 0;
+    border: 0;
+  }
+  .header .lang-toggle .lang-toggle-btn {
+    min-height: 36px;
+    padding: 0 9px;
+    border-color: rgba(255, 255, 255, 0.18);
+  }
+  .header .lang-toggle .lang-toggle-btn.active {
+    display: none;
+  }
+}

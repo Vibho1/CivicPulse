@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.ai import build_ai  # noqa: E402
+from app.ai import build_ai_from_settings  # noqa: E402
 from app.ai.base import Media, ParseInput  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.demo_photos import photo_bytes  # noqa: E402
@@ -42,9 +42,9 @@ def main() -> int:
     run_all = not (args.parse or args.verify or args.escalate)
 
     s = get_settings()
-    ai = build_ai(s.gemini_api_key, s.gemini_model, s.gemini_timeout_s)
+    ai = build_ai_from_settings(s)
     if ai.primary is None:
-        print("GEMINI_API_KEY is not set (or the SDK failed to initialise). Add it to .env and retry.")
+        print("Gemini is not configured: set GEMINI_API_KEY (or GEMINI_USE_VERTEX=true with ADC) in .env and retry.")
         return 2
     print(f"Gemini model: {ai.model}")
 
