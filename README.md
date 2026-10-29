@@ -8,8 +8,6 @@ A civic accountability layer for Bengaluru. Citizens report a pothole, dead stre
 |---|---|
 | [docs/PRD.md](docs/PRD.md) | **Product Requirements** — problem, goals, personas, user journeys, functional requirements FR-1…FR-10 with acceptance criteria, NFRs, success metrics, roadmap, open questions |
 | [docs/TDD.md](docs/TDD.md) | **Technical Design** — architecture, data model, intake pipeline, routing rules, impact score, closure state machine, AI resilience layer, privacy, deployment, testing, trade-offs |
-| [docs/API.md](docs/API.md) | HTTP API contract (objects, endpoints, errors) |
-| [docs/DEPLOY_GCP.md](docs/DEPLOY_GCP.md) | Cloud Run deployment with Terraform |
 | [docs/WHATSAPP.md](docs/WHATSAPP.md) | WhatsApp Business intake setup |
 
 ## Quick start
