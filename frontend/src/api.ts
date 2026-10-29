@@ -547,6 +547,9 @@ export interface CityStats {
   unverified_closure_rate: number | null;
   sla_breached_open: number;
   repeat_failures: number;
+  funnel: ClosureFunnel;
+  grade_distribution: Record<Grade, number>;
+  median_index: number | null;
   generated_at: string;
 }
 
@@ -579,6 +582,59 @@ export interface WardRow {
   repeat_failure_rate: number | null;
   avg_open_impact: number;
   top_agency: Agency;
+  /** 100 − sla_breach_rate. */
+  sla_compliance_rate: number | null;
+  /** Accountability Index 0–100: 40% verified closures · 30% SLA compliance · 15% no repeat failures · 15% no disputed closures. */
+  accountability_index: number;
+  grade: Grade;
+  /** Fewer than 3 closures: the grade rests on a small sample. */
+  low_data: boolean;
+  index_breakdown: IndexComponent[];
+  /** The issue this ward should be most embarrassed about (null when everything is verified). */
+  top_problem: TopProblem | null;
+  /** 1 = worst ward in the city. */
+  rank: number;
+}
+
+export type Grade = 'A' | 'B' | 'C' | 'D' | 'F';
+
+export interface IndexComponent {
+  component: 'verification' | 'sla' | 'repeat' | 'integrity';
+  weight: number;
+  /** 0–100 "goodness" value before weighting. */
+  value: number;
+  points: number;
+  reason: string;
+}
+
+export type TopProblemKind = 'disputed' | 'repeat_failure' | 'overdue' | 'open' | 'awaiting_proof';
+
+export interface TopProblem {
+  cluster_id: string;
+  title: string;
+  kind: TopProblemKind;
+  status: ClusterStatus;
+  category: Category;
+  agency: Agency;
+  report_count: number;
+  impact_score: number | null;
+  sla_breached: boolean;
+  hours_overdue: number;
+  verification_verdict: Verdict | null;
+  previous_cluster_id: string | null;
+}
+
+export interface ClosureFunnel {
+  reports: number;
+  issues: number;
+  duplicates_merged_pct: number | null;
+  closed: number;
+  ai_checked: number;
+  no_proof: number;
+  citizen_verified: number;
+  awaiting_proof: number;
+  disputed: number;
+  unverified_closure_rate: number | null;
 }
 
 export interface Scorecard {

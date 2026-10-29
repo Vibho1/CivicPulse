@@ -2980,3 +2980,483 @@ th.left .th-btn {
     break-inside: avoid;
   }
 }
+
+
+/* ============================================================================
+   Scorecard v2: funnel strip, report cards, grades, bullet charts, mix bars
+   ============================================================================ */
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--surface-3);
+  border-radius: 12px;
+  padding: 3px;
+}
+.segmented-btn {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 650;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.segmented-btn.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+.segmented-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+.chip-sm {
+  padding: 1px 7px;
+  font-size: 0.68rem;
+  margin-left: 6px;
+}
+
+/* --- funnel ---------------------------------------------------------------- */
+.funnel {
+  display: grid;
+  gap: 12px;
+}
+.funnel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.funnel-head .block-title {
+  margin-bottom: 0;
+}
+.funnel-head .chips {
+  margin-top: 0;
+}
+.funnel-stages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+.funnel-stage {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  align-content: end;
+  text-align: center;
+  min-width: 0;
+}
+.funnel-value {
+  font-size: 1.75rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.funnel-bar {
+  border-radius: 10px;
+  min-height: 36px;
+  transition: height 0.4s ease;
+}
+.funnel-ink {
+  background: #1e293b;
+}
+.funnel-ink2 {
+  background: #475569;
+}
+.funnel-pending {
+  background: var(--pending);
+}
+.funnel-pending2 {
+  background: #a78bfa;
+}
+.funnel-verified {
+  background: var(--verified);
+}
+.funnel-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-2);
+}
+.funnel-note {
+  font-size: 0.7rem;
+  color: var(--muted);
+  line-height: 1.3;
+}
+.funnel-arrow {
+  position: absolute;
+  right: -11px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--faint);
+  font-size: 1.4rem;
+  line-height: 1;
+}
+.funnel-headline {
+  margin: 0;
+  font-weight: 700;
+  font-size: 0.98rem;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--neutral-bg);
+  border: 1px solid var(--neutral-border);
+}
+.funnel-headline.tone-bad {
+  background: var(--bad-bg);
+  border-color: var(--bad-border);
+  color: var(--bad);
+}
+.funnel-headline.tone-good {
+  background: var(--good-bg);
+  border-color: var(--good-border);
+  color: var(--good);
+}
+
+/* --- grade badge ----------------------------------------------------------- */
+.grade {
+  display: inline-grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 800;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  letter-spacing: -0.02em;
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.12);
+}
+.grade-sm {
+  width: 26px;
+  height: 26px;
+  font-size: 0.85rem;
+}
+.grade-md {
+  width: 40px;
+  height: 40px;
+  font-size: 1.2rem;
+}
+.grade-lg {
+  width: 56px;
+  height: 56px;
+  font-size: 1.7rem;
+}
+.grade-low {
+  outline: 3px dashed rgba(15, 23, 42, 0.18);
+  outline-offset: 2px;
+}
+.grade-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+/* --- bullet chart ---------------------------------------------------------- */
+.bullet-wrap {
+  display: inline-grid;
+  gap: 3px;
+  min-width: 120px;
+  width: 100%;
+  max-width: 180px;
+}
+.bullet {
+  position: relative;
+  height: 12px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: linear-gradient(90deg, var(--bad-bg) 0 50%, var(--warn-bg) 50% 75%, var(--good-bg) 75% 100%);
+  border: 1px solid var(--border);
+}
+.bullet-inv {
+  background: linear-gradient(90deg, var(--good-bg) 0 25%, var(--warn-bg) 25% 50%, var(--bad-bg) 50% 100%);
+}
+.bullet-bar {
+  position: absolute;
+  left: 0;
+  top: 3px;
+  height: 4px;
+  border-radius: 2px;
+  background: #1f2937;
+}
+.bullet-target {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #0f172a;
+  transform: translateX(-1px);
+}
+.bullet-caption {
+  font-size: 0.74rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- lifecycle mix bar ----------------------------------------------------- */
+.mix-bar {
+  display: flex;
+  width: 100%;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface-3);
+}
+.mix-seg {
+  display: block;
+  height: 100%;
+}
+.mix-disputed,
+.mix-dot.mix-disputed {
+  background: var(--disputed);
+}
+.mix-open,
+.mix-dot.mix-open {
+  background: var(--open);
+}
+.mix-in_progress,
+.mix-dot.mix-in_progress {
+  background: var(--in-progress);
+}
+.mix-pending,
+.mix-dot.mix-pending {
+  background: var(--pending);
+}
+.mix-verified,
+.mix-dot.mix-verified {
+  background: var(--verified);
+}
+.mix-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.mix-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.mix-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.scorecard-meta {
+  gap: 8px;
+  margin: -4px 0 2px;
+}
+
+/* --- report cards ---------------------------------------------------------- */
+.report-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+}
+.rcard {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  border-top: 4px solid var(--neutral);
+}
+.rcard-A {
+  border-top-color: var(--verified);
+}
+.rcard-B {
+  border-top-color: #65a30d;
+}
+.rcard-C {
+  border-top-color: var(--open);
+}
+.rcard-D {
+  border-top-color: #ea580c;
+}
+.rcard-F {
+  border-top-color: var(--disputed);
+}
+.rcard-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.rcard-title {
+  min-width: 0;
+}
+.rcard-name {
+  font-weight: 800;
+  font-size: 1.1rem;
+  line-height: 1.2;
+}
+.rcard-rank {
+  color: var(--faint);
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+.rcard-mix {
+  display: grid;
+  gap: 6px;
+}
+.rcard-kpis {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.rcard-kpis > div {
+  display: grid;
+  text-align: center;
+  background: var(--surface-2);
+  border-radius: 10px;
+  padding: 8px 4px;
+}
+.rcard-kpi-value {
+  font-weight: 800;
+  font-size: 1.05rem;
+}
+.rcard-kpi-label {
+  font-size: 0.68rem;
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.rcard-problem {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--neutral-bg);
+  border: 1px solid var(--neutral-border);
+  font-size: 0.9rem;
+}
+.rcard-problem-bad {
+  background: var(--bad-bg);
+  border-color: var(--bad-border);
+}
+.rcard-problem-warn {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+}
+.rcard-problem-good {
+  background: var(--good-bg);
+  border-color: var(--good-border);
+}
+.rcard-problem-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.rcard-problem-text {
+  color: var(--text);
+  line-height: 1.4;
+}
+.rcard-problem-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--primary);
+  text-decoration: none;
+  margin-top: 2px;
+}
+.rcard-problem-link:hover {
+  text-decoration: underline;
+}
+.rcard-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.rcard-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* --- table additions ------------------------------------------------------- */
+.rank-cell {
+  width: 36px;
+}
+.rank {
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 800;
+  background: var(--neutral-bg);
+  color: var(--text-2);
+}
+.rank-F .rank,
+.rank-D .rank {
+  background: var(--bad-bg);
+  color: var(--bad);
+}
+.rank-C .rank {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+.rank-A .rank,
+.rank-B .rank {
+  background: var(--good-bg);
+  color: var(--good);
+}
+.table.scorecard th.sticky .mix-bar {
+  margin-top: 6px;
+  max-width: 160px;
+}
+
+@media (max-width: 960px) {
+  .funnel-stages {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .funnel-value {
+    font-size: 1.35rem;
+  }
+  .funnel-arrow {
+    display: none;
+  }
+}
+@media (max-width: 768px) {
+  .table-card.table-card-always {
+    display: block;
+  }
+  .table-card-always .table-wrap {
+    overflow-x: auto;
+  }
+  .report-cards {
+    grid-template-columns: 1fr;
+  }
+  .funnel-stages {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .funnel-label {
+    font-size: 0.66rem;
+  }
+  .funnel-note {
+    display: none;
+  }
+  .funnel-bar {
+    min-height: 24px;
+  }
+  .scorecard-meta {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

@@ -318,6 +318,118 @@ def _closure_stats(cs: list[dict]) -> tuple[list[dict], list[dict], float | None
     return closures, verified, _pct(len(closures) - len(verified), len(closures))
 
 
+# --------------------------------------------------------------------------- #
+# Accountability Index (0-100) and letter grade per ward
+# --------------------------------------------------------------------------- #
+
+# Weights sum to 1. Verification carries the most weight because "closed on paper" is the
+# failure mode CivicPulse exists to expose; SLA compliance is next; repeat failures and
+# disputed closures are integrity signals.
+INDEX_WEIGHTS = {"verification": 0.40, "sla": 0.30, "repeat": 0.15, "integrity": 0.15}
+GRADE_BANDS = [(85.0, "A"), (70.0, "B"), (55.0, "C"), (40.0, "D"), (0.0, "F")]
+LOW_DATA_CLOSURES = 3  # fewer closures than this -> grade is shown with a "low data" caveat
+NEUTRAL_VERIFICATION = 50.0  # wards with no closures yet are neither rewarded nor punished
+
+
+def grade_for(index: float) -> str:
+    for floor, letter in GRADE_BANDS:
+        if index >= floor:
+            return letter
+    return "F"
+
+
+def accountability_index(
+    *,
+    closures: int,
+    verified_closure_rate: float | None,
+    sla_breach_rate: float | None,
+    repeat_failure_rate: float | None,
+    disputed_closure_rate: float | None,
+) -> tuple[float, str, list[dict]]:
+    """Return (index, grade, breakdown). Every component is a 0-100 'goodness' value times its weight."""
+    verification = verified_closure_rate if closures else NEUTRAL_VERIFICATION
+    components = [
+        ("verification", verification if verification is not None else NEUTRAL_VERIFICATION, "verified closures" if closures else "no closures yet (neutral)"),
+        ("sla", 100.0 - (sla_breach_rate or 0.0), "issues within service target"),
+        ("repeat", 100.0 - (repeat_failure_rate or 0.0), "fixes that did not fail again"),
+        ("integrity", 100.0 - (disputed_closure_rate or 0.0), "closures not disputed by proof"),
+    ]
+    breakdown = []
+    total = 0.0
+    for name, value, reason in components:
+        value = max(0.0, min(100.0, float(value)))
+        points = round(value * INDEX_WEIGHTS[name], 1)
+        total += points
+        breakdown.append({"component": name, "weight": INDEX_WEIGHTS[name], "value": round(value, 1), "points": points, "reason": reason})
+    total = round(min(100.0, total), 1)
+    return total, grade_for(total), breakdown
+
+
+# Which issue should headline a ward card. Lower rank = more urgent.
+_PROBLEM_RANK = {"disputed": 0, "repeat_failure": 1, "overdue": 2, "open": 3, "awaiting_proof": 4}
+
+
+def top_problem(cs: list[dict], now: datetime) -> dict | None:
+    """The single issue a ward should be embarrassed about, with the facts needed to phrase it in any language."""
+    candidates = []
+    for c in cs:
+        status = c["status"]
+        if status == ClusterStatus.RESOLVED_VERIFIED.value:
+            continue
+        breached = is_sla_breached(c, now)
+        if status == ClusterStatus.CLOSURE_DISPUTED.value:
+            kind = "disputed"
+        elif c.get("repeat_failure"):
+            kind = "repeat_failure"
+        elif status in (ClusterStatus.OPEN.value, ClusterStatus.IN_PROGRESS.value):
+            kind = "overdue" if breached else "open"
+        else:
+            kind = "awaiting_proof"
+        overdue_h = (now - parse_iso(c["sla_due_at"])).total_seconds() / 3600 if breached and status != ClusterStatus.RESOLVED_PENDING_VERIFICATION.value else 0.0
+        candidates.append((_PROBLEM_RANK[kind], -float(c.get("impact_score") or 0), kind, overdue_h, c))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: (t[0], t[1]))
+    _, _, kind, overdue_h, c = candidates[0]
+    return {
+        "cluster_id": c["id"],
+        "title": c["title"],
+        "kind": kind,
+        "status": c["status"],
+        "category": c["category"],
+        "agency": c["agency"],
+        "report_count": c["report_count"],
+        "impact_score": c.get("impact_score"),
+        "sla_breached": bool(overdue_h > 0),
+        "hours_overdue": round(max(0.0, overdue_h), 1),
+        "verification_verdict": c.get("verification_verdict"),
+        "previous_cluster_id": c.get("previous_cluster_id"),
+    }
+
+
+def closure_funnel(all_cs: list[dict]) -> dict:
+    """Reports -> issues -> closed -> AI-checked -> citizen-verified, plus where the drop-off went."""
+    reports = sum(c["report_count"] for c in all_cs)
+    issues = len(all_cs)
+    closures = [c for c in all_cs if c.get("resolved_at")]
+    ai_checked = [c for c in closures if c.get("after_photo_path")]
+    verified = [c for c in closures if c["status"] == ClusterStatus.RESOLVED_VERIFIED.value]
+    disputed = [c for c in closures if c["status"] == ClusterStatus.CLOSURE_DISPUTED.value]
+    awaiting = [c for c in closures if c["status"] == ClusterStatus.RESOLVED_PENDING_VERIFICATION.value]
+    return {
+        "reports": reports,
+        "issues": issues,
+        "duplicates_merged_pct": _pct(reports - issues, reports),
+        "closed": len(closures),
+        "ai_checked": len(ai_checked),
+        "no_proof": len(closures) - len(ai_checked),
+        "citizen_verified": len(verified),
+        "awaiting_proof": len(awaiting),
+        "disputed": len(disputed),
+        "unverified_closure_rate": _pct(len(closures) - len(verified), len(closures)),
+    }
+
+
 def ward_scorecard(store: Store, now: datetime | None = None) -> dict:
     now = now or now_utc()
     now_s = now.isoformat()
@@ -341,6 +453,17 @@ def ward_scorecard(store: Store, now: datetime | None = None) -> dict:
         repeats = [c for c in cs if c.get("repeat_failure")]
         res_hours = [hours_between(c["created_at"], c["verified_at"] or c["resolved_at"]) for c in verified if c.get("resolved_at")]
         close_hours = [hours_between(c["created_at"], c["resolved_at"]) for c in closures]
+        verified_rate = _pct(len(verified), len(closures))
+        disputed_rate = _pct(len(disputed), len(closures))
+        sla_breach_rate = _pct(len(breached), len(cs))
+        repeat_rate = _pct(len(repeats), len(cs))
+        index, grade, index_breakdown = accountability_index(
+            closures=len(closures),
+            verified_closure_rate=verified_rate,
+            sla_breach_rate=sla_breach_rate,
+            repeat_failure_rate=repeat_rate,
+            disputed_closure_rate=disputed_rate,
+        )
         rows.append(
             {
                 "ward": ward.name,
@@ -357,23 +480,36 @@ def ward_scorecard(store: Store, now: datetime | None = None) -> dict:
                 "resolved_verified": len(verified),
                 "closure_disputed": len(disputed),
                 "closures": len(closures),
-                "verified_closure_rate": _pct(len(verified), len(closures)),
+                "verified_closure_rate": verified_rate,
                 "unverified_closure_rate": unverified_rate,
-                "disputed_closure_rate": _pct(len(disputed), len(closures)),
+                "disputed_closure_rate": disputed_rate,
                 "avg_hours_to_close": round(sum(close_hours) / len(close_hours), 1) if close_hours else None,
                 "avg_hours_to_verified_fix": round(sum(res_hours) / len(res_hours), 1) if res_hours else None,
-                "sla_breach_rate": _pct(len(breached), len(cs)),
+                "sla_breach_rate": sla_breach_rate,
+                "sla_compliance_rate": round(100.0 - sla_breach_rate, 1) if sla_breach_rate is not None else None,
                 "sla_breached_open": sum(1 for c in unresolved if is_sla_breached(c, now)),
-                "repeat_failure_rate": _pct(len(repeats), len(cs)),
+                "repeat_failure_rate": repeat_rate,
                 "avg_open_impact": round(sum(c["impact_score"] for c in unresolved) / len(unresolved), 1) if unresolved else 0.0,
                 "top_agency": max((c["agency"] for c in cs), key=lambda a: sum(1 for c in cs if c["agency"] == a)),
+                # Accountability grade (see accountability_index) and what to say about the ward.
+                "accountability_index": index,
+                "grade": grade,
+                "low_data": len(closures) < LOW_DATA_CLOSURES,
+                "index_breakdown": index_breakdown,
+                "top_problem": top_problem(cs, now),
             }
         )
 
-    rows.sort(key=lambda r: ((r["verified_closure_rate"] if r["verified_closure_rate"] is not None else -1), -r["sla_breach_rate"] if r["sla_breach_rate"] else 0))
+    # Worst first: lowest index, then most disputed closures, then most SLA-breached open issues.
+    rows.sort(key=lambda r: (r["accountability_index"], -r["closure_disputed"], -r["sla_breached_open"], r["ward"]))
+    for rank, r in enumerate(rows, 1):
+        r["rank"] = rank
     all_cs = [c for cs in by_ward.values() for c in cs]
     closures, verified, unverified_rate = _closure_stats(all_cs)
     unresolved = [c for c in all_cs if c["status"] in UNRESOLVED_STATUSES]
+    grades = defaultdict(int)
+    for r in rows:
+        grades[r["grade"]] += 1
     city = {
         "clusters": len(all_cs),
         "active": sum(1 for c in all_cs if c["status"] in ACTIVE_STATUSES),
@@ -384,6 +520,9 @@ def ward_scorecard(store: Store, now: datetime | None = None) -> dict:
         "unverified_closure_rate": unverified_rate,
         "sla_breached_open": sum(1 for c in unresolved if is_sla_breached(c, now)),
         "repeat_failures": sum(1 for c in all_cs if c.get("repeat_failure")),
+        "funnel": closure_funnel(all_cs),
+        "grade_distribution": {g: grades.get(g, 0) for g in "ABCDF"},
+        "median_index": (sorted(r["accountability_index"] for r in rows)[len(rows) // 2] if rows else None),
         "generated_at": now_s,
     }
     return {"city": city, "wards": rows}
