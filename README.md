@@ -29,6 +29,3 @@ Or: `make setup && make seed && make api` / `make web`. Single container: `docke
 
 Tests: `cd backend && .venv/bin/python -m pytest -q` · `cd frontend && npm run typecheck`.
 
-## Credits
-
-Inspired by *CrowdFix*, a voice-first civic reporting prototype by team "503: Service Unavailable" at the lablab.ai AI Infra Summit Hackathon. CivicPulse re-frames the idea for Bengaluru around **verification and accountability** rather than reporting alone.
