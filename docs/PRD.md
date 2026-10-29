@@ -6,7 +6,7 @@
 | **Version** | 1.0 (MVP) |
 | **Status** | Implemented; open questions tracked in §12 |
 | **Geography** | Bengaluru (Greater Bengaluru Authority, ex-BBMP) |
-| **Companion docs** | [TDD.md](TDD.md) · [API.md](API.md) · [DEPLOY_GCP.md](DEPLOY_GCP.md) · [WHATSAPP.md](WHATSAPP.md) |
+| **Companion docs** | [TDD.md](TDD.md) · [WHATSAPP.md](WHATSAPP.md) |
 
 ---
 
