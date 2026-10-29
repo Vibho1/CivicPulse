@@ -4,7 +4,7 @@
 |---|---|
 | **Product** | CivicPulse — from complaint to closure, with proof |
 | **Version** | 1.0 (MVP, as implemented) |
-| **Companion docs** | [PRD.md](PRD.md) · [API.md](API.md) · [DEPLOY_GCP.md](DEPLOY_GCP.md) · [WHATSAPP.md](WHATSAPP.md) |
+| **Companion docs** | [PRD.md](PRD.md) · [WHATSAPP.md](WHATSAPP.md) |
 | **Traceability** | Each section names the PRD requirement(s) it implements (FR-x / NFR-x) |
 
 ---
@@ -392,20 +392,20 @@ classDiagram
 
 ## 12. API surface
 
-The complete contract (objects, query params, error codes) is in [API.md](API.md). Summary:
+The complete contract (objects, query params, error codes) is detailed below:
 
 | Area | Endpoints |
 |---|---|
-| Meta | `GET /health`, `GET /meta`, `GET /stats` |
-| Intake | `POST /reports`, `GET /reports/{id}`, `POST /clusters/{id}/corroborate` |
-| Issues | `GET /clusters`, `GET /clusters/{id}`, `POST /clusters/{id}/status` |
-| Closure | `POST /clusters/{id}/resolve`, `POST /clusters/{id}/verify` |
-| Accountability | `POST /clusters/{id}/escalate`, `POST /clusters/{id}/escalation-package`, `POST /wards/{ward}/escalation-package`, `GET /wards/scorecard`, `POST /clusters/{id}/external-ref` |
-| Inbox | `GET /notifications`, `POST /notifications/read` |
-| WhatsApp | `GET/POST /whatsapp/webhook` |
-| Demo | `POST /admin/seed`, `POST /admin/reset` (only when `DEMO_MODE=true`) |
+| **Meta** | `GET /health`, `GET /meta`, `GET /stats` |
+| **Intake** | `POST /reports`, `GET /reports/{id}`, `POST /clusters/{id}/corroborate` |
+| **Issues** | `GET /clusters`, `GET /clusters/{id}`, `POST /clusters/{id}/status` |
+| **Closure** | `POST /clusters/{id}/resolve`, `POST /clusters/{id}/verify` |
+| **Accountability** | `POST /clusters/{id}/escalate`, `POST /clusters/{id}/escalation-package`, `POST /wards/{ward}/escalation-package`, `GET /wards/scorecard`, `POST /clusters/{id}/external-ref` |
+| **Inbox** | `GET /notifications`, `POST /notifications/read` |
+| **WhatsApp** | `GET /whatsapp/webhook`, `POST /whatsapp/webhook` |
+| **Demo Admin** | `POST /admin/seed`, `POST /admin/reset` |
 
-Cross-cutting: CORS from `CORS_ORIGINS`; gzip above 1 KB; `/uploads/*` static; the built PWA at `/` with SPA fallback.
+Cross-cutting: CORS from `CORS_ORIGINS`; gzip above 1 KB; `/uploads/*` static media mounting; the built PWA is mounted at `/` with SPA fallback.
 
 ## 13. Frontend design
 
@@ -454,8 +454,18 @@ flowchart LR
 
 - **Image** (`Dockerfile`): stage 1 `node:22-alpine` builds the PWA; stage 2 `python:3.12-slim` installs `ffmpeg`, Litestream 0.3.13 and the backend, copies `frontend/dist`, exposes 8080, runs `deploy/entrypoint.sh`.
 - **Entrypoint**: without `LITESTREAM_REPLICA_URL` → plain `uvicorn --proxy-headers`. With it → `litestream restore -if-db-not-exists`, force WAL, then `litestream replicate -exec uvicorn …` so every change streams to GCS and a final sync runs on shutdown.
-- **Terraform** (`deploy/terraform`): enables APIs, Artifact Registry repo, data + build buckets, two service accounts (run, build) with least-privilege IAM (bucket objects, Vertex AI user, secret accessor), `google_cloud_run_v2_service` with a GCS volume for uploads, env wiring, and public invoker binding. Walkthrough in [DEPLOY_GCP.md](DEPLOY_GCP.md).
+- **Terraform** (`deploy/terraform`): enables APIs, Artifact Registry repo, data + build buckets, two service accounts (run, build) with least-privilege IAM (bucket objects, Vertex AI user, secret accessor), `google_cloud_run_v2_service` with a GCS volume for uploads, env wiring, and public invoker binding.
 - **Single-writer constraint:** SQLite + Litestream require exactly one instance (`max_instances=1`). This is the documented scale ceiling of the MVP (PRD NG4).
+
+### 15.1 Deployment Walkthrough
+
+To deploy to Google Cloud Run:
+1. `cd deploy/terraform` and copy `terraform.tfvars.example` to `terraform.tfvars`, filling in your project ID and region.
+2. Run `terraform init` and `terraform apply`.
+3. The Terraform output will print the exact `gcloud builds submit` command. Run it from the repository root to build and push the container image (uses `deploy/cloudbuild.yaml`).
+4. Set the `image_tag` variable in `terraform.tfvars` to the tag you just built.
+5. Run `terraform apply` again to deploy the new image to Cloud Run.
+6. The final URL will be printed as `service_url`.
 
 ## 16. Testing strategy (NFR-8)
 
